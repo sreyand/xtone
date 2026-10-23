@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="TagLibSharp" Version="2.3.0" />
+    <Compile Include="..\..\src\XTONE\Models\LibraryModels.cs" Link="LibraryModels.cs" />
+    <Compile Include="..\..\src\XTONE\Services\LibraryStore.cs" Link="LibraryStore.cs" />
+    <Compile Include="..\..\src\XTONE\Services\LibraryWatcher.cs" Link="LibraryWatcher.cs" />
+    <Compile Include="..\..\src\XTONE\Dialogs\FileDetailsWindow.cs" Link="FileDetailsWindow.cs" />
+    <Compile Include="..\..\src\XTONE\GlobalUsings.cs" Link="GlobalUsings.cs" />
+  </ItemGroup>
+</Project>

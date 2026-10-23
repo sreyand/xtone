@@ -1,0 +1,232 @@
+<Window x:Class="XTONE.Dialogs.CollectionEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Collection editor" Width="980" Height="860" MinWidth="760" MinHeight="540"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
+        Background="{DynamicResource PaperBrush}" Foreground="{DynamicResource InkBrush}" FontFamily="{StaticResource AppFont}"
+        Loaded="Window_Loaded" PreviewKeyDown="Window_PreviewKeyDown"
+        KeyboardNavigation.TabNavigation="Cycle"
+        TextOptions.TextFormattingMode="Display">
+    <Window.Resources>
+        <Style x:Key="FieldLabel" TargetType="Label">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{DynamicResource MutedBrush}" />
+            <Setter Property="Padding" Value="0,0,0,7" />
+        </Style>
+        <Style x:Key="ListChrome" TargetType="ListBox">
+            <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Background" Value="{DynamicResource PaperBrush}" />
+            <Setter Property="Padding" Value="3" />
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+            <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
+            <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
+            <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
+            <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="KeyboardNavigation.TabNavigation" Value="Once" />
+        </Style>
+        <Style x:Key="SmallButton" TargetType="Button" BasedOn="{StaticResource QuietButton}">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Padding" Value="10,8" />
+            <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}" />
+            <Setter Property="MinHeight" Value="34" />
+        </Style>
+        <Style x:Key="TrackItem" TargetType="ListBoxItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
+                            <ContentPresenter />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource HoverBrush}" /></Trigger>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource SelectionBrush}" />
+                    <Setter Property="Foreground" Value="{DynamicResource SelectedTextBrush}" />
+                </Trigger>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource FocusBrush}" /></Trigger>
+                <MultiTrigger>
+                    <MultiTrigger.Conditions>
+                        <Condition Property="IsSelected" Value="True" />
+                        <Condition Property="IsKeyboardFocusWithin" Value="True" />
+                    </MultiTrigger.Conditions>
+                    <Setter Property="BorderBrush" Value="{DynamicResource SelectedTextBrush}" />
+                </MultiTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="TrackSecondaryText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MutedBrush}" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                    <Setter Property="Foreground" Value="{DynamicResource SelectedTextBrush}" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <DataTemplate x:Key="AvailableTrackTemplate">
+            <StackPanel Margin="8,7">
+                <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="{Binding Subtitle}" FontSize="12" Style="{StaticResource TrackSecondaryText}" Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+        </DataTemplate>
+        <DataTemplate x:Key="OrderedTrackTemplate">
+            <Grid Margin="7">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="31" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding PositionText}" Style="{StaticResource TrackSecondaryText}" FontSize="12" VerticalAlignment="Center" />
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding Subtitle}" FontSize="12" Style="{StaticResource TrackSecondaryText}" Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid Margin="28,24,28,22">
+        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+        <StackPanel Grid.Row="0" Margin="0,0,0,19">
+            <TextBlock x:Name="HeadingText" Text="Create album" FontSize="29" FontWeight="Bold" />
+            <TextBlock x:Name="DescriptionText" Text="Make a personal album from your local music." Foreground="{DynamicResource MutedBrush}" FontSize="14" Margin="0,7,0,0" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,5,0" Focusable="False">
+            <StackPanel>
+                <Grid Margin="0,0,0,16">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="20" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <StackPanel x:Name="TitleField" Grid.Column="0">
+                        <Label x:Name="TitleLabel" Content="_Album title" Target="{Binding ElementName=TitleBox}" Style="{StaticResource FieldLabel}" />
+                        <TextBox x:Name="TitleBox" Style="{StaticResource TextInput}" TabIndex="0" AutomationProperties.Name="Collection title" MaxLength="300" />
+                    </StackPanel>
+                    <StackPanel x:Name="ArtistField" Grid.Column="2">
+                        <Label Content="A_rtist" Target="{Binding ElementName=ArtistBox}" Style="{StaticResource FieldLabel}" />
+                        <TextBox x:Name="ArtistBox" Style="{StaticResource TextInput}" TabIndex="1" AutomationProperties.Name="Album artist" MaxLength="300" />
+                    </StackPanel>
+                </Grid>
+
+                <Grid x:Name="AlbumFields" Margin="0,0,0,18">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="20" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="Cover artwork" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource MutedBrush}" Margin="0,0,0,9" />
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="78" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <Border Width="68" Height="68" CornerRadius="6" Background="{DynamicResource SurfaceBrush}" ClipToBounds="True" VerticalAlignment="Top">
+                                <Image x:Name="CoverPreview" Stretch="UniformToFill" AutomationProperties.Name="Selected album artwork" />
+                            </Border>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock x:Name="ArtworkText" Text="No cover selected" Foreground="{DynamicResource MutedBrush}" FontSize="12" TextTrimming="CharacterEllipsis" Margin="0,1,0,9" />
+                                <WrapPanel>
+                                    <Button Content="Choose image" Click="ChooseArtwork_Click" Style="{StaticResource SmallButton}" TabIndex="2" AutomationProperties.Name="Choose album artwork" Margin="0,0,7,0" />
+                                    <Button x:Name="ClearArtworkButton" Content="Clear" Click="ClearArtwork_Click" Style="{StaticResource SmallButton}" TabIndex="3" AutomationProperties.Name="Clear album artwork" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <Label Content="Private liner _notes" Target="{Binding ElementName=NotesBox}" Style="{StaticResource FieldLabel}" />
+                        <TextBox x:Name="NotesBox" Height="88" Style="{StaticResource TextInput}" AcceptsReturn="True" TextWrapping="Wrap"
+                                 VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto" TabIndex="4" AutomationProperties.Name="Private album liner notes" MaxLength="20000" />
+                    </StackPanel>
+                </Grid>
+
+                <StackPanel x:Name="PlaylistOptions" Visibility="Collapsed" Margin="0,0,0,19">
+                    <CheckBox x:Name="SmartModeBox" Content="Build this playlist _automatically" FontSize="14"
+                              Checked="SmartMode_Changed" Unchecked="SmartMode_Changed" TabIndex="2"
+                              AutomationProperties.Name="Build a smart playlist automatically" />
+                    <Grid x:Name="SmartRulePanel" Visibility="Collapsed" Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="230" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <Label Content="Live playlist _rule" Target="{Binding ElementName=SmartRuleBox}" Style="{StaticResource FieldLabel}" />
+                            <ComboBox x:Name="SmartRuleBox" DisplayMemberPath="Label" SelectedValuePath="Key" Padding="10,9" FontSize="14"
+                                      SelectionChanged="SmartRule_SelectionChanged" TabIndex="3" AutomationProperties.Name="Smart playlist rule" />
+                        </StackPanel>
+                        <TextBlock x:Name="SmartRuleDescription" Grid.Column="1" TextWrapping="Wrap" Foreground="{DynamicResource MutedBrush}" FontSize="13" Margin="18,25,0,0" VerticalAlignment="Center" />
+                    </Grid>
+                </StackPanel>
+
+                <Grid x:Name="TrackPickerPanel" Margin="0,0,0,4">
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="300" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <Grid Grid.Row="0" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <TextBlock Text="Choose music and set the track order" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                        <TextBlock x:Name="SelectedCountText" Grid.Column="1" Foreground="{DynamicResource MutedBrush}" FontSize="12" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
+                    </Grid>
+                    <Grid Grid.Row="1" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="20" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <Label Content="_Search available music" Target="{Binding ElementName=SearchBox}" Style="{StaticResource FieldLabel}" />
+                            <TextBox x:Name="SearchBox" Style="{StaticResource TextInput}" TextChanged="SearchBox_TextChanged" TabIndex="5" AutomationProperties.Name="Search available tracks" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" VerticalAlignment="Bottom">
+                            <TextBlock Text="Track order" FontSize="12" FontWeight="SemiBold" Foreground="{DynamicResource MutedBrush}" Margin="0,0,0,8" />
+                            <TextBlock Text="Drag to reorder, or use Alt+Up / Alt+Down." TextWrapping="Wrap" Foreground="{DynamicResource MutedBrush}" FontSize="12" Margin="0,0,0,10" />
+                        </StackPanel>
+                    </Grid>
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="20" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <ListBox x:Name="AvailableList" Grid.Column="0" Style="{StaticResource ListChrome}" SelectionMode="Extended"
+                                 ItemTemplate="{StaticResource AvailableTrackTemplate}" SelectionChanged="AvailableList_SelectionChanged"
+                                 MouseDoubleClick="AvailableList_MouseDoubleClick" PreviewKeyDown="AvailableList_PreviewKeyDown"
+                                 TabIndex="6" AutomationProperties.Name="Available tracks"
+                                 AutomationProperties.HelpText="Select tracks with Control or Shift, then use Add selected. Enter adds the selected tracks.">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem" BasedOn="{StaticResource TrackItem}">
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
+                                    <Setter Property="ToolTip" Value="{Binding Path}" />
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                        </ListBox>
+                        <ListBox x:Name="OrderedList" Grid.Column="2" Style="{StaticResource ListChrome}" SelectionMode="Single"
+                                 ItemTemplate="{StaticResource OrderedTrackTemplate}" SelectionChanged="OrderedList_SelectionChanged"
+                                 PreviewMouseLeftButtonDown="OrderedList_PreviewMouseLeftButtonDown" MouseMove="OrderedList_MouseMove"
+                                 AllowDrop="True" DragOver="OrderedList_DragOver" Drop="OrderedList_Drop"
+                                 PreviewKeyDown="OrderedList_PreviewKeyDown" TabIndex="9" AutomationProperties.Name="Selected tracks in playback order"
+                                 AutomationProperties.HelpText="Use Alt plus Up or Down to move the selected track. Delete removes it from this collection.">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem" BasedOn="{StaticResource TrackItem}">
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
+                                    <Setter Property="ToolTip" Value="{Binding Path}" />
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                        </ListBox>
+                    </Grid>
+                    <Grid Grid.Row="3" Margin="0,11,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="20" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <WrapPanel Grid.Column="0">
+                            <Button x:Name="AddSelectedButton" Content="Add selected" Click="AddSelected_Click" Style="{StaticResource SmallButton}" TabIndex="7" IsEnabled="False" AutomationProperties.Name="Add selected tracks" Margin="0,0,8,6" />
+                            <Button x:Name="AddResultsButton" Content="Add all results" Click="AddResults_Click" Style="{StaticResource SmallButton}" TabIndex="8" AutomationProperties.Name="Add all filtered tracks" Margin="0,0,0,6" />
+                        </WrapPanel>
+                        <WrapPanel Grid.Column="2">
+                            <Button x:Name="MoveUpButton" Content="Move up" Click="MoveUp_Click" Style="{StaticResource SmallButton}" TabIndex="10" IsEnabled="False" AutomationProperties.Name="Move selected track up" Margin="0,0,7,6" />
+                            <Button x:Name="MoveDownButton" Content="Move down" Click="MoveDown_Click" Style="{StaticResource SmallButton}" TabIndex="11" IsEnabled="False" AutomationProperties.Name="Move selected track down" Margin="0,0,7,6" />
+                            <Button x:Name="RemoveTrackButton" Content="Remove" Click="RemoveTrack_Click" Style="{StaticResource SmallButton}" TabIndex="12" IsEnabled="False" AutomationProperties.Name="Remove selected track from collection" Margin="0,0,0,6" />
+                        </WrapPanel>
+                    </Grid>
+                </Grid>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Grid Grid.Row="2" Margin="0,17,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,18,0">
+                <TextBlock x:Name="ErrorText" Foreground="{DynamicResource ErrorBrush}" FontSize="13" TextWrapping="Wrap" MaxHeight="62"
+                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" AutomationProperties.LiveSetting="Assertive" />
+                <TextBlock Text="Original audio files stay in their folders." Foreground="{DynamicResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button Content="Cancel" IsCancel="True" Style="{StaticResource QuietButton}" TabIndex="13" Margin="0,0,9,0" AutomationProperties.Name="Cancel collection changes" />
+                <Button x:Name="SaveButton" Content="Create album" Click="Save_Click" IsDefault="True" Style="{StaticResource PrimaryButton}" TabIndex="14" Padding="20,10" AutomationProperties.Name="Save collection" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

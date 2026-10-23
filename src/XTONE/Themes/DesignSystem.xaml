@@ -2,11 +2,19 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <FontFamily x:Key="AppFont">pack://application:,,,/XTONE;component/Assets/Fonts/#Open Sauce One</FontFamily>
     <SolidColorBrush x:Key="InkBrush" Color="#101010" />
-    <SolidColorBrush x:Key="MutedBrush" Color="#77797F" />
+    <SolidColorBrush x:Key="MutedBrush" Color="#62666D" />
     <SolidColorBrush x:Key="LineBrush" Color="#E6E7EB" />
     <SolidColorBrush x:Key="PaperBrush" Color="#FFFFFF" />
     <SolidColorBrush x:Key="BlueBrush" Color="#255BFF" />
 
+    <SolidColorBrush x:Key="SelectionBrush" Color="#EFF3FF" />
+    <SolidColorBrush x:Key="HoverBrush" Color="#F3F5F9" />
+    <SolidColorBrush x:Key="SelectedTextBrush" Color="#255BFF" />
+    <SolidColorBrush x:Key="AccentTextBrush" Color="#FFFFFF" />
+    <SolidColorBrush x:Key="FocusBrush" Color="#255BFF" />
+    <SolidColorBrush x:Key="RowSelectionBrush" Color="#EFF3FF" />
+    <SolidColorBrush x:Key="SurfaceBrush" Color="#F1F3F6" />
+    <SolidColorBrush x:Key="ErrorBrush" Color="#AE3434" />
     <Geometry x:Key="LibraryIcon">M9,17 V4 L21,2 V15 M9,8 L21,6 M9,17 C9,21 2,22 2,18.5 C2,15 9,14 9,17 M21,15 C21,19 14,20 14,16.5 C14,13 21,12 21,15</Geometry>
     <Geometry x:Key="AlbumIcon">F0 M12,0 A12,12 0 1 1 12,24 A12,12 0 1 1 12,0 Z M12,9 A3,3 0 1 1 12,15 A3,3 0 1 1 12,9 Z M18,4 A1.2,1.2 0 1 1 18,6.4 A1.2,1.2 0 1 1 18,4 Z</Geometry>
     <Geometry x:Key="ArtistsIcon">M9,9 A3,3 0 1 1 9,3 A3,3 0 1 1 9,9 M18,8 A2.5,2.5 0 1 1 18,3 A2.5,2.5 0 1 1 18,8 M2,20 V17 C2,12 16,12 16,17 V20 M16,12 C20,11 23,13 23,17 V19</Geometry>
@@ -24,7 +32,7 @@
 
     <Style x:Key="QuietButton" TargetType="Button">
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Foreground" Value="{StaticResource InkBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
         <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="FontFamily" Value="{StaticResource AppFont}" />
@@ -33,7 +41,7 @@
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
-        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource KeyboardFocusStyle}" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
@@ -45,7 +53,7 @@
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Chrome" Property="Background" Value="#F3F5F9" />
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource HoverBrush}" />
                         </Trigger>
                         <Trigger Property="IsKeyboardFocused" Value="True">
                             <Setter TargetName="Chrome" Property="BorderBrush" Value="#9DB3FF" />
@@ -58,8 +66,8 @@
         </Setter>
     </Style>
     <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource QuietButton}">
-        <Setter Property="Background" Value="{StaticResource BlueBrush}" />
-        <Setter Property="Foreground" Value="White" />
+        <Setter Property="Background" Value="{DynamicResource BlueBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
         <Setter Property="FontSize" Value="18" />
         <Setter Property="Height" Value="50" />
         <Setter Property="Template">
@@ -69,8 +77,8 @@
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                     <ControlTemplate.Triggers>
-                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Background" Value="#174BEC" /></Trigger>
-                        <Trigger Property="IsPressed" Value="True"><Setter TargetName="Chrome" Property="Background" Value="#123DC6" /></Trigger>
+                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource BlueBrush}" /></Trigger>
+                        <Trigger Property="IsPressed" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource BlueBrush}" /></Trigger>
                         <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Chrome" Property="BorderBrush" Value="#92AAFF" /><Setter TargetName="Chrome" Property="BorderThickness" Value="2" /></Trigger>
                         <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Chrome" Property="Opacity" Value="0.4" /></Trigger>
                     </ControlTemplate.Triggers>
@@ -110,8 +118,8 @@
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                     <ControlTemplate.Triggers>
-                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Background" Value="#174BEC" /></Trigger>
-                        <Trigger Property="IsPressed" Value="True"><Setter TargetName="Chrome" Property="Background" Value="#123DC6" /></Trigger>
+                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource BlueBrush}" /></Trigger>
+                        <Trigger Property="IsPressed" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource BlueBrush}" /></Trigger>
                         <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Chrome" Property="BorderThickness" Value="3" /><Setter TargetName="Chrome" Property="BorderBrush" Value="#A0B5FF" /></Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -127,7 +135,7 @@
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="Chrome" Background="Transparent"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
                     <ControlTemplate.Triggers>
-                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Background" Value="#F0F1F3" /></Trigger>
+                        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource HoverBrush}" /></Trigger>
                         <Trigger Property="IsPressed" Value="True"><Setter TargetName="Chrome" Property="Background" Value="#E5E7EB" /></Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -135,8 +143,8 @@
         </Setter>
     </Style>
     <Style x:Key="TextInput" TargetType="TextBox">
-        <Setter Property="Background" Value="#FAFBFC" />
-        <Setter Property="Foreground" Value="{StaticResource InkBrush}" />
+        <Setter Property="Background" Value="{DynamicResource PaperBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
         <Setter Property="BorderBrush" Value="#DEE1E6" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Padding" Value="12,10" />
@@ -146,12 +154,12 @@
     </Style>
 
     <ControlTemplate x:Key="BlueThumb" TargetType="Thumb">
-        <Ellipse Width="20" Height="20" Fill="{StaticResource BlueBrush}">
+        <Ellipse Width="20" Height="20" Fill="{DynamicResource BlueBrush}">
             <Ellipse.Effect><DropShadowEffect Color="#255BFF" Opacity="0.12" BlurRadius="4" ShadowDepth="1" /></Ellipse.Effect>
         </Ellipse>
     </ControlTemplate>
     <ControlTemplate x:Key="WhiteThumb" TargetType="Thumb">
-        <Ellipse Width="20" Height="20" Fill="White" Stroke="#DADDE3" StrokeThickness="1">
+        <Ellipse Width="20" Height="20" Fill="{DynamicResource PaperBrush}" Stroke="{DynamicResource LineBrush}" StrokeThickness="1">
             <Ellipse.Effect><DropShadowEffect Color="#AAB0BB" Opacity="0.18" BlurRadius="4" ShadowDepth="1" /></Ellipse.Effect>
         </Ellipse>
     </ControlTemplate>
@@ -165,9 +173,9 @@
         <Grid Background="Transparent">
             <Track x:Name="PART_Track" VerticalAlignment="Center" IsDirectionReversed="{TemplateBinding IsDirectionReversed}"
                    Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}" Value="{TemplateBinding Value}">
-                <Track.DecreaseRepeatButton><RepeatButton Command="{x:Static Slider.DecreaseLarge}" Style="{StaticResource SliderRail}" Background="{StaticResource BlueBrush}" /></Track.DecreaseRepeatButton>
+                <Track.DecreaseRepeatButton><RepeatButton Command="{x:Static Slider.DecreaseLarge}" Style="{StaticResource SliderRail}" Background="{DynamicResource BlueBrush}" /></Track.DecreaseRepeatButton>
                 <Track.Thumb><Thumb Width="20" Height="24" Template="{StaticResource BlueThumb}" /></Track.Thumb>
-                <Track.IncreaseRepeatButton><RepeatButton Command="{x:Static Slider.IncreaseLarge}" Style="{StaticResource SliderRail}" Background="#E3E5EA" /></Track.IncreaseRepeatButton>
+                <Track.IncreaseRepeatButton><RepeatButton Command="{x:Static Slider.IncreaseLarge}" Style="{StaticResource SliderRail}" Background="{DynamicResource LineBrush}" /></Track.IncreaseRepeatButton>
             </Track>
         </Grid>
     </ControlTemplate>
@@ -175,16 +183,16 @@
         <Grid Background="Transparent">
             <Track x:Name="PART_Track" VerticalAlignment="Center" IsDirectionReversed="{TemplateBinding IsDirectionReversed}"
                    Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}" Value="{TemplateBinding Value}">
-                <Track.DecreaseRepeatButton><RepeatButton Command="{x:Static Slider.DecreaseLarge}" Style="{StaticResource SliderRail}" Background="{StaticResource BlueBrush}" /></Track.DecreaseRepeatButton>
+                <Track.DecreaseRepeatButton><RepeatButton Command="{x:Static Slider.DecreaseLarge}" Style="{StaticResource SliderRail}" Background="{DynamicResource BlueBrush}" /></Track.DecreaseRepeatButton>
                 <Track.Thumb><Thumb Width="20" Height="24" Template="{StaticResource WhiteThumb}" /></Track.Thumb>
-                <Track.IncreaseRepeatButton><RepeatButton Command="{x:Static Slider.IncreaseLarge}" Style="{StaticResource SliderRail}" Background="#E3E5EA" /></Track.IncreaseRepeatButton>
+                <Track.IncreaseRepeatButton><RepeatButton Command="{x:Static Slider.IncreaseLarge}" Style="{StaticResource SliderRail}" Background="{DynamicResource LineBrush}" /></Track.IncreaseRepeatButton>
             </Track>
         </Grid>
     </ControlTemplate>
     <Style x:Key="SeekSlider" TargetType="Slider">
         <Setter Property="Height" Value="24" />
         <Setter Property="IsMoveToPointEnabled" Value="True" />
-        <Setter Property="Template" Value="{StaticResource SeekSliderTemplate}" />
+        <Setter Property="FocusVisualStyle" Value="{DynamicResource KeyboardFocusStyle}" /><Setter Property="Template" Value="{StaticResource SeekSliderTemplate}" />
     </Style>
     <Style x:Key="VolumeSlider" TargetType="Slider" BasedOn="{StaticResource SeekSlider}">
         <Setter Property="Template" Value="{StaticResource VolumeSliderTemplate}" />

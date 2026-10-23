@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <Compile Include="../../src/XTONE/Services/AudioPlayer.cs" Link="AudioPlayer.cs" />
+    <Compile Include="../../src/XTONE/Services/AudioTapProvider.cs" Link="AudioTapProvider.cs" />
+    <Compile Include="../../src/XTONE/Services/AccurateMediaFoundationReader.cs" Link="AccurateMediaFoundationReader.cs" />
+    <Compile Include="../../src/XTONE/Services/GaplessSampleProvider.cs" Link="GaplessSampleProvider.cs" />
+  </ItemGroup>
+</Project>

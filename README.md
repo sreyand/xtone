@@ -1,6 +1,6 @@
 # XTONE
 
-XTONE is a small Windows music player for a local library. The first version includes a minimal album shelf, local album and playlist creation, file details, and an audio reactive player dock.
+XTONE is a lightweight Windows music player for a local library, built with WPF and .NET 8. It includes an adaptive album shelf, editable personal albums and playlists, a playback queue, favorites and listening history, file details, and an audio reactive player dock.
 
 ## Run
 
@@ -18,13 +18,19 @@ dotnet build src/XTONE/XTONE.csproj
 
 ## Supported audio
 
-XTONE accepts MP3, WAV, FLAC, and ALAC in an M4A/MP4 container. Playback uses Windows Media Foundation through NAudio, so a Windows installation needs the decoder for the file's format. Windows 11 is the recommended target. ALAC is checked in the MP4 container before import.
+XTONE accepts MP3, WAV, FLAC, and ALAC in an M4A/MP4 container. Playback uses Windows Media Foundation through NAudio, so a Windows installation needs the decoder for the file's format. Windows 11 is the recommended target. ALAC is checked structurally in the MP4 container before import. Unreadable files stay visible with an error so they can be repaired or reconnected.
+
+Playback uses shared WASAPI, normalized to the selected endpoint's mix rate and stereo. Settings lets you select an output device. The engine prepares the next decoder in the background and joins prepared tracks without restarting output. Silence and encoder padding already in the source can remain; MP3 gapless padding is not trimmed. This is not an exclusive or bit-perfect output mode.
 
 The track details show the file's codec, bitrate, sample rate, bit depth, and channel count when those values are available. XTONE labels the codec as lossless or lossy; it does not guess whether a file was upsampled or converted from another source.
 
 ## Local library
 
-Imported tracks remain in their original folders. XTONE stores track paths, custom album details, playlists, and artwork under `%LOCALAPPDATA%\XTONE`. A custom album groups existing tracks and can have its own title, artist, artwork, and private liner notes.
+Imported tracks remain in their original folders. XTONE stores cached metadata, custom album details, playlists, favorites, history, session state and artwork under `%LOCALAPPDATA%\XTONE`, with atomic writes and a recovery backup. A custom album groups existing tracks and can have its own title, artist, artwork, private liner notes and track order. Editing collections does not modify audio tags or move files.
+
+Folder imports run in the background with progress and cancellation. Watched folders refresh automatically; unchanged files reuse cached metadata. Missing files stay in collections and can be reconnected using **Locate file** from a track's context menu. Importing the same path again does not add a duplicate library entry.
+
+Create ordinary playlists or smart playlists based on favorites, lossless encoding, recently played tracks or unplayed tracks. Queue entries can be reordered by dragging or with **Alt+Up/Down**. **Play next** remains explicit even with shuffle or repeat enabled. The current queue, track position, volume and playback settings restore on launch, paused. Windows now-playing controls, media keys and taskbar transport buttons are supported when available.
 
 ## Stack
 
@@ -36,7 +42,9 @@ Imported tracks remain in their original folders. XTONE stores track paths, cust
 
 The desktop interface uses the supplied XTONE wordmark and bundled Open Sauce One fonts, an adaptive album grid, vector icons, custom playback controls, and an FFT-driven ribbon visualizer. The font license is included at `src/XTONE/Assets/Fonts/OFL.txt`; the original font source is [Open Sauce Fonts](https://github.com/marcologous/Open-Sauce-Fonts).
 
-Use **Ctrl+F** to search albums or the track library, **Esc** to close search, and **Ctrl+O** to add individual audio files. Right-click **Add music** for the file picker.
+Use **Ctrl+F** to search, **Ctrl+O** to add files, **Ctrl+Q** for the queue, **Ctrl+D** to favorite the current track, **Ctrl+,** for settings, **Ctrl+Left/Right** for previous/next, and **F5** to rescan. Double-click a track or press **Enter** to play it. **Space** toggles playback in track lists; **Esc** closes the drawer, search or collection detail. Track context menus expose play next, queue, favorite, file details and relink actions. Windows high contrast and animation preferences are respected; settings also offers reduced motion.
+
+For isolated development checks, set `XTONE_DATA_DIR` to a temporary directory before starting the app. It overrides the library storage directory for that process. The regression harnesses under `tests/` use their own temporary state. See `tests/XTONE.AudioTests/README.md` for native codec/device checks.
 
 For visual comparison with the supplied mockup, an optional in-memory preview accepts the reference image:
 
