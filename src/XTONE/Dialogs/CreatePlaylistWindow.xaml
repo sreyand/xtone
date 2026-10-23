@@ -1,0 +1,35 @@
+<Window x:Class="XTONE.Dialogs.CreatePlaylistWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="New playlist" Width="480" Height="590" MinHeight="480"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
+        Background="#FFFFFF" Foreground="#141414" FontFamily="{StaticResource AppFont}">
+    <Grid Margin="26">
+        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+        <StackPanel Grid.Row="0" Margin="0,0,0,20">
+            <TextBlock Text="Create a playlist" FontSize="25" FontWeight="Bold" />
+            <TextBlock Text="Keep a few favorites together, right on this PC." Foreground="#777A80" Margin="0,6,0,0" />
+        </StackPanel>
+        <StackPanel Grid.Row="1" Margin="0,0,0,16">
+            <TextBlock Text="PLAYLIST NAME" FontSize="10" FontWeight="SemiBold" Foreground="#777A80" Margin="0,0,0,7" />
+            <TextBox x:Name="NameBox" Style="{StaticResource TextInput}" />
+        </StackPanel>
+        <ListBox x:Name="PlaylistTracks" Grid.Row="2" SelectionMode="Multiple" BorderBrush="#E8E8E5" BorderThickness="1" Padding="4">
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <StackPanel Margin="7,6">
+                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding Artist}" Foreground="#777A80" FontSize="11" />
+                    </StackPanel>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+        <DockPanel Grid.Row="3" Margin="0,16,0,0">
+            <TextBlock x:Name="ErrorText" Foreground="#B54141" VerticalAlignment="Center" FontSize="12" />
+            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+                <Button Content="Cancel" Click="Cancel_Click" Style="{StaticResource QuietButton}" Margin="0,0,8,0" />
+                <Button Content="Create playlist" Click="Save_Click" Style="{StaticResource PrimaryButton}" />
+            </StackPanel>
+        </DockPanel>
+    </Grid>
+</Window>
