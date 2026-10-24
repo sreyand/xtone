@@ -3,9 +3,16 @@ using System.Windows.Media;
 
 namespace XTONE.Controls;
 
+public enum SignalVisualization { Ribbon, Bars }
+
 /// <summary>Draws restrained ribbons from the supplied FFT magnitudes.</summary>
 public sealed class SignalVisualizer : FrameworkElement
 {
+    public static readonly DependencyProperty VisualizationProperty = DependencyProperty.Register(
+        nameof(Visualization), typeof(SignalVisualization), typeof(SignalVisualizer),
+        new FrameworkPropertyMetadata(SignalVisualization.Ribbon, FrameworkPropertyMetadataOptions.AffectsRender));
+    public SignalVisualization Visualization
+    { get => (SignalVisualization)GetValue(VisualizationProperty); set => SetValue(VisualizationProperty, value); }
     private const int SampleCount = 64;
     private readonly double[] _spectrum = new double[SampleCount];
     private bool _active;
@@ -62,7 +69,7 @@ public sealed class SignalVisualizer : FrameworkElement
             var amplitude = Math.Max(0, height * 0.44);
             // Related contours and their reflection give the fine signal-ribbon shape.
             // Their amplitudes share the same measured bands; there is no idle oscillator.
-            for (var layer = RibbonPens.Length - 1; layer >= 0; layer--)
+            for (var layer = Visualization == SignalVisualization.Ribbon ? RibbonPens.Length - 1 : -1; layer >= 0; layer--)
             {
                 var scale = 1 - layer * 0.18;
                 drawingContext.DrawGeometry(null, RibbonPens[layer], Ribbon(width, baseline, amplitude * scale, -1));
@@ -81,8 +88,13 @@ public sealed class SignalVisualizer : FrameworkElement
 
                 var x = width * fraction;
                 drawingContext.PushOpacity(0.3 + 0.7 * fade);
-                drawingContext.DrawLine(BarPen,
-                    new Point(x, baseline - barHeight), new Point(x, baseline + barHeight * 0.13));
+                if (Visualization == SignalVisualization.Bars)
+                    drawingContext.DrawRoundedRectangle(BarPen.Brush, null,
+                        new Rect(x - Math.Max(.7, width / barCount * .19), baseline - barHeight,
+                            Math.Max(1.4, width / barCount * .38), Math.Max(.4, barHeight * 1.65)), 1.4, 1.4);
+                else
+                    drawingContext.DrawLine(BarPen,
+                        new Point(x, baseline - barHeight), new Point(x, baseline + barHeight * 0.13));
                 drawingContext.Pop();
             }
         }

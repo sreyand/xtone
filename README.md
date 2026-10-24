@@ -42,7 +42,19 @@ Create ordinary playlists or smart playlists based on favorites, lossless encodi
 
 The desktop interface uses the supplied XTONE wordmark and bundled Open Sauce One fonts, an adaptive album grid, vector icons, custom playback controls, and an FFT-driven ribbon visualizer. The font license is included at `src/XTONE/Assets/Fonts/OFL.txt`; the original font source is [Open Sauce Fonts](https://github.com/marcologous/Open-Sauce-Fonts).
 
+Motion is enabled by default. Library, Focus and Mini crossfade between views; app dialogs fade in and out, fullscreen changes use a clean fade, and closing the app finishes its fade before releasing its windows. Sidebar, typography and player spacing ease between responsive sizes. Album covers glide into their new positions as the shelf resizes or changes column count. Hover, page and queue transitions use the same restrained easing. Rapid view changes reverse the active fade without restarting playback. Windows reduced-animation preferences and **Reduce motion** in Settings settle transitions immediately.
+
 Use **Ctrl+F** to search, **Ctrl+O** to add files, **Ctrl+Q** for the queue, **Ctrl+D** to favorite the current track, **Ctrl+,** for settings, **Ctrl+Left/Right** for previous/next, and **F5** to rescan. Double-click a track or press **Enter** to play it. **Space** toggles playback in track lists; **Esc** closes the drawer, search or collection detail. Track context menus expose play next, queue, favorite, file details and relink actions. Windows high contrast and animation preferences are respected; settings also offers reduced motion.
+
+## Listening views
+
+Choose **Focus** or press **Ctrl+Shift+F** for a dedicated listening view with large artwork, favorite control, playback position, volume, and a measured audio visualizer. Choose Ribbon, Bars, or Off. **F11** toggles fullscreen; Escape exits fullscreen first, then returns to the library. The transport and seek controls stay visible in smaller windows.
+
+Choose **Mini** or press **Ctrl+Shift+M** for the compact player. Its **On top** toggle keeps it above other windows when wanted. Use Library or the close button to return to the library, and Focus to expand the listening view. A context menu offers queue, volume and mute controls. The pin and visualizer preferences are saved; startup opens the library paused.
+
+All views share one engine and queue. Switching views preserves playback, position, volume, favorites and Windows now-playing controls. The mini player disables unused spectrum analysis, and minimized views update less frequently. Seek gestures commit only on explicit input, including accessible range-value commands. Closing the main app waits for already accepted library and history writes before releasing playback resources.
+
+Launch with `XTONE.exe --focus` or `XTONE.exe --mini` to open a listening view directly. Playback still restores paused.
 
 For isolated development checks, set `XTONE_DATA_DIR` to a temporary directory before starting the app. It overrides the library storage directory for that process. The regression harnesses under `tests/` use their own temporary state. See `tests/XTONE.AudioTests/README.md` for native codec/device checks.
 

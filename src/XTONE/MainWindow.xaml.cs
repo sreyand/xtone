@@ -38,24 +38,53 @@ public partial class MainWindow : Window
         MinHeight = Math.Min(MinHeight, SystemParameters.WorkArea.Height);
         AlbumItems.ItemsSource = _albumRows; ArtistItems.ItemsSource = _artistCards;
         PlaylistItems.ItemsSource = _playlistCards; QueueItems.ItemsSource = _queue.Entries;
+        InitializeListeningViews();
         _player.PlaybackStopped += Player_PlaybackStopped;
         _player.NextTrackStarted += Player_NextTrackStarted;
         _uiTimer.Tick += UiTimer_Tick;
+        UiMotion.Enabled = ThemeAccessibility.AnimationsEnabled;
+        UiMotion.PrepareFadeIn(this);
     }
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
         InitializeWindowsControls();
+        _ = UiMotion.FadeInAsync(this);
         try { if (_isDesignPreview) LoadDesignPreview(); else await LoadLibraryAsync(); }
         catch (Exception error) { if (!_closed) { ShowSection("Albums"); SetStatus($"Couldn't open the library: {error.Message}"); } }
-        if (_closed) return;
-        _uiTimer.Start(); DrawVisualizer();
+        if (_closed || _closingRequested) return;
+        _uiTimer.Start(); UpdateListeningActivity(); DrawVisualizer();
+        var arguments = Environment.GetCommandLineArgs();
+        if (arguments.Contains("--mini")) ShowMiniView();
+        else if (arguments.Contains("--focus")) ShowFocusView();
     }
-    private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+    private bool _closingRequested;
+    private bool _allowClose;
+    private async void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        SavePlaybackSession(); _closed = true; _scanCancellation?.Cancel();
-        _watcher.Changed -= Watcher_Changed; _watcher.Dispose(); _uiTimer.Stop(); _mediaSession?.Dispose();
-        if (_accessibility is not null) { _accessibility.Changed -= Accessibility_Changed; _accessibility.Dispose(); }
-        _player.PlaybackStopped -= Player_PlaybackStopped; _player.NextTrackStarted -= Player_NextTrackStarted; _player.Dispose();
+        if (_allowClose) return;
+        e.Cancel = true;
+        if (_closingRequested) return;
+        _closingRequested = true;
+        ++_viewTransitionVersion;
+        SavePlaybackSession(false);
+        IsEnabled = false;
+        if (TaskbarItemInfo is { } taskbar) foreach (var button in taskbar.ThumbButtonInfos) button.IsEnabled = false;
+        if (_focusWindow is not null) _focusWindow.IsEnabled = false;
+        if (_miniWindow is not null) _miniWindow.IsEnabled = false;
+        _focusWindow?.PrepareToHide(); _miniWindow?.PrepareToHide();
+        _scanCancellation?.Cancel(); _uiTimer.Stop(); StopCurrentPlayback();
+        var fades = ListeningWindows().Where(window => window.IsVisible).Select(window => UiMotion.FadeOutAsync(window)).ToArray();
+        // Let this cancelled Closing event return before issuing the final Close.
+        await Task.Yield();
+        try { await Task.WhenAll(fades); await DrainLibraryWritesAsync(); await _sessionSaveTask; }
+        finally
+        {
+            _closed = true; CloseListeningViews();
+            _watcher.Changed -= Watcher_Changed; _watcher.Dispose(); _uiTimer.Stop(); _mediaSession?.Dispose();
+            if (_accessibility is not null) { _accessibility.Changed -= Accessibility_Changed; _accessibility.Dispose(); }
+            _player.PlaybackStopped -= Player_PlaybackStopped; _player.NextTrackStarted -= Player_NextTrackStarted; _player.Dispose();
+            _allowClose = true; Close();
+        }
     }
     private void ShowSection(string section)
     {
@@ -78,6 +107,8 @@ public partial class MainWindow : Window
             navigation.FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal;
         }
         UpdateSectionSubtitle(); UpdateVisiblePage();
+        FadePageIn(_section switch { "Albums" => AlbumScroll, "Artists" => ArtistsPanel,
+            "Playlists" => PlaylistsPanel, _ => LibraryPanel });
     }
     private void UpdateSectionSubtitle()
     {
@@ -118,6 +149,7 @@ public partial class MainWindow : Window
         DetailArtwork.Source = album.Artwork; DetailArtwork.SourcePath = album.ArtworkPath; DetailTracks.ItemsSource = album.Tracks;
         EditCollectionButton.Content = _activePlaylist is not null || album.IsCreatedLocally ? "Edit" : "Make personal album";
         DeleteCollectionButton.Visibility = _activePlaylist is not null || album.IsCreatedLocally ? Visibility.Visible : Visibility.Collapsed;
+        FadePageIn(AlbumDetailPanel);
     }
     private void BackToAlbums_Click(object sender, RoutedEventArgs e) => ShowSection(_section);
     private void Artist_Click(object sender, RoutedEventArgs e)
@@ -162,9 +194,11 @@ public partial class MainWindow : Window
             }
             e.Handled = true;
         }
+        else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key is Key.F or Key.M)
+        { if (e.Key == Key.F) ShowFocusView(); else ShowMiniView(); e.Handled = true; }
         else if (e.Key == Key.Escape)
         {
-            if (QueuePanel.Visibility == Visibility.Visible) QueuePanel.Visibility = Visibility.Collapsed;
+            if (QueuePanel.Visibility == Visibility.Visible) _ = SetQueueVisibleAsync(false);
             else if (SearchBox.Visibility == Visibility.Visible) { SearchBox.Clear(); SearchBox.Visibility = Visibility.Collapsed; SearchToolbarButton.Focus(); }
             else if (_activeAlbum is not null) ShowSection(_section); else return;
             e.Handled = true;
@@ -182,24 +216,62 @@ public partial class MainWindow : Window
         if (ShellBorder is null) return;
         ShellBorder.CornerRadius = new(WindowState == WindowState.Maximized ? 0 : 7);
         MaximizeGlyph.Data = Geometry.Parse(WindowState == WindowState.Maximized ? "M3,0 H12 V9 M0,3 H9 V12 H0 Z" : "M0,0 H11 V11 H0 Z");
+        UpdateListeningActivity();
     }
     private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         if (MainContent is null) return;
         var compact = ActualWidth < 1240 || ActualHeight < 800;
-        SidebarColumn.Width = new GridLength(compact ? 240 : 276);
-        MainContent.Margin = compact ? new(26, 44, 22, 16) : new(42, 68, 28, 24);
-        MainHeaderRow.Height = new GridLength(compact ? 88 : 110);
-        PlayerDockRow.Height = new GridLength(compact ? 152 : 176);
-        VisualizerRow.Height = QualitySpacerRow.Height = new GridLength(compact ? 38 : 58);
-        TransportRow.Height = QualityInfoRow.Height = new GridLength(compact ? 64 : 68);
-        Visualizer.Height = compact ? 38 : 58;
-        PageTitle.FontSize = compact ? 48 : 64;
-        PageTitle.LineHeight = compact ? 64 : 80;
-        PageSubtitle.FontSize = compact ? 16 : 20;
-        SidebarContents.Margin = compact ? new(12, 42, 12, 12) : new(12, 54, 12, 12);
-        foreach (var nav in new[] { LibraryNav, AlbumsNav, ArtistsNav, PlaylistsNav }) { nav.Height = compact ? 46 : 58; nav.FontSize = compact ? 18 : 20; }
-        foreach (var nav in new[] { FavoritesNav, HistoryNav }) { nav.Height = compact ? 38 : 44; nav.FontSize = compact ? 15 : 16; }
+        var duration = IsLoaded && ShowActivated ? 200 : 0;
+        UiMotion.AnimateGridLength(SidebarColumn, ColumnDefinition.WidthProperty, new GridLength(compact ? 240 : 276), duration);
+        UiMotion.AnimateThickness(MainContent, MarginProperty, compact ? new(26, 44, 22, 16) : new(42, 68, 28, 24), duration);
+        UiMotion.AnimateGridLength(MainHeaderRow, RowDefinition.HeightProperty, new GridLength(compact ? 88 : 110), duration);
+        UiMotion.AnimateGridLength(PlayerDockRow, RowDefinition.HeightProperty, new GridLength(compact ? 152 : 176), duration);
+        foreach (var row in new[] { VisualizerRow, QualitySpacerRow }) UiMotion.AnimateGridLength(row, RowDefinition.HeightProperty, new GridLength(compact ? 38 : 58), duration);
+        foreach (var row in new[] { TransportRow, QualityInfoRow }) UiMotion.AnimateGridLength(row, RowDefinition.HeightProperty, new GridLength(compact ? 64 : 68), duration);
+        UiMotion.AnimateDouble(Visualizer, HeightProperty, compact ? 38 : 58, duration);
+        UiMotion.AnimateDouble(PageTitle, TextBlock.FontSizeProperty, compact ? 48 : 64, duration);
+        UiMotion.AnimateDouble(PageTitle, TextBlock.LineHeightProperty, compact ? 64 : 80, duration);
+        UiMotion.AnimateDouble(PageSubtitle, TextBlock.FontSizeProperty, compact ? 16 : 20, duration);
+        UiMotion.AnimateThickness(SidebarContents, MarginProperty, compact ? new(12, 42, 12, 12) : new(12, 54, 12, 12), duration);
+        foreach (var nav in new[] { LibraryNav, AlbumsNav, ArtistsNav, PlaylistsNav })
+        { UiMotion.AnimateDouble(nav, HeightProperty, compact ? 46 : 58, duration); UiMotion.AnimateDouble(nav, Control.FontSizeProperty, compact ? 18 : 20, duration); }
+        foreach (var nav in new[] { FavoritesNav, HistoryNav })
+        { UiMotion.AnimateDouble(nav, HeightProperty, compact ? 38 : 44, duration); UiMotion.AnimateDouble(nav, Control.FontSizeProperty, compact ? 15 : 16, duration); }
+    }
+
+    private void FadePageIn(FrameworkElement element)
+    {
+        if (!IsLoaded || !ShowActivated || !UiMotion.Enabled) return;
+        _ = UiMotion.FadeElementIn(element, 160);
+    }
+
+    private bool? ShowAnimatedDialog(Window dialog)
+    {
+        UiMotion.EnableWindowFades(dialog);
+        return dialog.ShowDialog();
+    }
+
+    private long _queueTransitionVersion;
+    private bool _queueRequested;
+    private async Task SetQueueVisibleAsync(bool visible)
+    {
+        var version = ++_queueTransitionVersion;
+        _queueRequested = visible;
+        if (visible)
+        {
+            if (QueuePanel.Visibility != Visibility.Visible)
+            { QueuePanel.Visibility = Visibility.Visible; FadePageIn(QueuePanel); }
+            else UiMotion.AnimateDouble(QueuePanel, OpacityProperty, 1, 140);
+            QueueItems.Focus();
+            return;
+        }
+        var animate = UiMotion.Enabled && ShowActivated && IsLoaded;
+        UiMotion.AnimateDouble(QueuePanel, OpacityProperty, 0, animate ? 140 : 0);
+        if (animate) await Task.Delay(140);
+        if (version != _queueTransitionVersion || _closed) return;
+        QueuePanel.Visibility = Visibility.Collapsed;
+        UiMotion.AnimateDouble(QueuePanel, OpacityProperty, 1, 0);
     }
     private sealed record ArtistSummary(string Name, int Count) { public string CountText => $"{Count:N0} {(Count == 1 ? "track" : "tracks")}"; }
     private sealed record PlaylistSummary(CustomPlaylist Playlist, List<Track> Tracks)

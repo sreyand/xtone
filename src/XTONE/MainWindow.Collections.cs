@@ -9,6 +9,7 @@ namespace XTONE;
 public partial class MainWindow
 {
     private readonly SemaphoreSlim _libraryWriteGate = new(1, 1);
+    private readonly HashSet<Task> _pendingLibraryWrites = [];
     private readonly Dictionary<string, long> _favoriteRequests = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, bool> _pendingFavorites = new(StringComparer.OrdinalIgnoreCase);
     private async Task<bool> ReloadSavedLibraryAsync()
@@ -27,7 +28,30 @@ public partial class MainWindow
             return false;
         }
     }
-    private async Task<bool> PersistLibraryChangeAsync(Action change, string description)
+    private Task<bool> PersistLibraryChangeAsync(Action change, string description)
+    {
+        // Register the complete operation, including time waiting for the write
+        // gate, so an async close can drain every accepted user action.
+        var write = PersistLibraryChangeCoreAsync(change, description);
+        _pendingLibraryWrites.Add(write);
+        _ = ForgetCompletedLibraryWriteAsync(write);
+        return write;
+    }
+    private async Task ForgetCompletedLibraryWriteAsync(Task write)
+    {
+        try { await write; }
+        catch { /* The core reports write errors; draining still observes the task. */ }
+        finally { _pendingLibraryWrites.Remove(write); }
+    }
+    private async Task DrainLibraryWritesAsync()
+    {
+        while (_pendingLibraryWrites.Count > 0)
+        {
+            await Task.WhenAll(_pendingLibraryWrites.ToArray());
+            _pendingLibraryWrites.RemoveWhere(write => write.IsCompleted);
+        }
+    }
+    private async Task<bool> PersistLibraryChangeCoreAsync(Action change, string description)
     {
         await _libraryWriteGate.WaitAsync();
         try
@@ -52,7 +76,7 @@ public partial class MainWindow
         CustomAlbum? draft = album is null ? null : _customAlbums.FirstOrDefault(item => item.Id == album.Id)
             ?? new CustomAlbum { Title = album.Title, Artist = album.Artist, Notes = album.Notes, ArtworkPath = album.ArtworkPath, TrackPaths = album.Tracks.Select(track => track.Path).ToList() };
         var dialog = new CollectionEditorWindow(_tracks, CollectionKind.Album, album: draft) { Owner = this };
-        if (dialog.ShowDialog() != true || dialog.AlbumResult is not { } result) return;
+        if (ShowAnimatedDialog(dialog) != true || dialog.AlbumResult is not { } result) return;
         if (!await PersistLibraryChangeAsync(() => _store.SaveAlbum(result), "save this album")
             || !await ReloadSavedLibraryAsync()) return;
         ShowSection("Albums");
@@ -62,7 +86,7 @@ public partial class MainWindow
     {
         if (_isDesignPreview) return;
         var dialog = new CollectionEditorWindow(_tracks, CollectionKind.Playlist, playlist: playlist) { Owner = this };
-        if (dialog.ShowDialog() != true || dialog.PlaylistResult is not { } result) return;
+        if (ShowAnimatedDialog(dialog) != true || dialog.PlaylistResult is not { } result) return;
         if (!await PersistLibraryChangeAsync(() => _store.SavePlaylist(result), "save this playlist")
             || !await ReloadSavedLibraryAsync()) return;
         ShowSection("Playlists");
@@ -138,8 +162,8 @@ public partial class MainWindow
         if (_currentTrack is { } current && SamePath(current.Path, path)) current.IsFavorite = favorite;
         LibraryTracks.Items.Refresh(); DetailTracks.Items.Refresh();
     }
-    private void TrackDetails_Click(object sender, RoutedEventArgs e) { if (ActionTrack(sender) is { } track) new FileDetailsWindow(track) { Owner = this }.ShowDialog(); }
-    private void NowPlayingDetails_Click(object sender, RoutedEventArgs e) { if (_currentTrack is { } track) new FileDetailsWindow(track) { Owner = this }.ShowDialog(); }
+    private void TrackDetails_Click(object sender, RoutedEventArgs e) { if (ActionTrack(sender) is { } track) ShowAnimatedDialog(new FileDetailsWindow(track) { Owner = this }); }
+    private void NowPlayingDetails_Click(object sender, RoutedEventArgs e) { if (_currentTrack is { } track) ShowAnimatedDialog(new FileDetailsWindow(track) { Owner = this }); }
     private async void TrackRelink_Click(object sender, RoutedEventArgs e)
     {
         if (_isDesignPreview || ActionTrack(sender) is not { } track) return;
@@ -168,7 +192,7 @@ public partial class MainWindow
         catch (Exception error) { SetStatus($"Couldn't reconnect this file: {error.Message}"); }
     }
     private void Queue_Click(object sender, RoutedEventArgs e)
-    { QueuePanel.Visibility = QueuePanel.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible; if (QueuePanel.Visibility == Visibility.Visible) QueueItems.Focus(); }
+    { _ = SetQueueVisibleAsync(!_queueRequested); }
     private void QueueChanged() { FlushPreparedAudio(); PrepareNextTrack(); SavePlaybackSession(false); }
     private void QueuePlay_Click(object sender, RoutedEventArgs e) { if (_queue.Select(QueueItems.SelectedIndex)) StartCurrentTrack(); }
     private void QueueUp_Click(object sender, RoutedEventArgs e) => MoveQueued(-1);

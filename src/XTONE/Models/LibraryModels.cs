@@ -116,6 +116,8 @@ public sealed class PlaybackSession
     public string RepeatMode { get; set; } = "Off";
     public string? OutputDeviceId { get; set; }
     public bool ReducedMotion { get; set; }
+    public bool MiniAlwaysOnTop { get; set; }
+    public string FocusVisualization { get; set; } = "Ribbon";
     public string LastSection { get; set; } = "Albums";
     public DateTime SavedUtc { get; set; }
 }

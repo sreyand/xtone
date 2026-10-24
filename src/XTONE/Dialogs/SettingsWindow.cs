@@ -26,7 +26,7 @@ public sealed class SettingsWindow : Window
         hint.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush"); panel.Children.Add(hint);
         _motion.IsChecked = reducedMotion; panel.Children.Add(_motion);
         panel.Children.Add(new TextBlock { Text = "Keyboard shortcuts", FontWeight = FontWeights.Bold, FontSize = 18, Margin = new(0, 10, 0, 10) });
-        panel.Children.Add(new TextBlock { Text = "Ctrl+F   Search\nCtrl+O   Add files\nCtrl+Q   Queue\nCtrl+D   Favorite current track\nCtrl+← / →   Previous / next\nSpace   Play / pause in track lists\nEnter   Play selected track\nF5   Rescan folders\nEscape   Close drawer or search", FontSize = 13, LineHeight = 23 });
+        panel.Children.Add(new TextBlock { Text = "Ctrl+F   Search\nCtrl+O   Add files\nCtrl+Q   Queue\nCtrl+Shift+F   Focus mode\nCtrl+Shift+M   Mini-player\nF11   Fullscreen in Focus mode\nCtrl+D   Favorite current track\nCtrl+← / →   Previous / next\nSpace   Play / pause in track lists\nEnter   Play selected track\nF5   Rescan folders\nEscape   Close drawer or search", FontSize = 13, LineHeight = 23 });
         var native = new TextBlock { Text = mediaError is null ? "Windows media keys and now playing are enabled." : $"Windows media controls unavailable: {mediaError}", TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new(0, 20, 0, 0) };
         native.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush"); panel.Children.Add(native);
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new(0, 26, 0, 0) };

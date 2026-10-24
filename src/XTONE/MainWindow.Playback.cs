@@ -47,6 +47,7 @@ public partial class MainWindow
         if (_closed) return;
         _player.AnalysisEnabled = !_reducedMotion && ThemeAccessibility.AnimationsEnabled;
         ShowSelectedNavigation();
+        UpdateListeningActivity();
     }
     private void ShowSelectedNavigation()
     {
@@ -63,6 +64,11 @@ public partial class MainWindow
         if (_closed) return;
         VolumeSlider.Value = Math.Clamp(double.IsFinite(session.Volume) ? session.Volume : .72, 0, 1);
         _outputDeviceId = session.OutputDeviceId; _reducedMotion = session.ReducedMotion;
+        UpdateListeningActivity();
+        _syncingListeningState = true;
+        _listeningState.MiniAlwaysOnTop = session.MiniAlwaysOnTop;
+        _listeningState.Visualization = session.FocusVisualization;
+        _syncingListeningState = false;
         _player.AnalysisEnabled = !_reducedMotion && ThemeAccessibility.AnimationsEnabled;
         try { _player.SetOutputDevice(_outputDeviceId); }
         catch (Exception error) { _outputDeviceId = null; SetStatus($"Using default output: {error.Message}"); }
@@ -89,7 +95,8 @@ public partial class MainWindow
         QueuePaths = _queue.Entries.Select(entry => entry.Track.Path).ToList(), CurrentIndex = _queue.CurrentIndex,
         PositionSeconds = _player.Position.TotalSeconds, Volume = VolumeSlider.Value, Shuffle = _queue.Shuffle,
         Repeat = _queue.RepeatMode == QueueRepeatMode.One, RepeatMode = _queue.RepeatMode.ToString(),
-        OutputDeviceId = _outputDeviceId, ReducedMotion = _reducedMotion, LastSection = _section
+        OutputDeviceId = _outputDeviceId, ReducedMotion = _reducedMotion, LastSection = _section,
+        MiniAlwaysOnTop = _listeningState.MiniAlwaysOnTop, FocusVisualization = _listeningState.Visualization
     };
     private void SavePlaybackSession(bool wait = true)
     {
@@ -104,7 +111,7 @@ public partial class MainWindow
     }
     private void PlayTrack(Track track, IReadOnlyList<Track> tracks)
     {
-        if (_isDesignPreview || _closed) return;
+        if (_isDesignPreview || _closed || _closingRequested) return;
         if (!track.CanPlay || !File.Exists(track.Path)) { SetStatus("This track is unavailable. Use Locate file to reconnect it."); return; }
         var playable = tracks.Where(item => item.CanPlay).ToList();
         var index = playable.FindIndex(item => ReferenceEquals(item, track));
@@ -116,7 +123,7 @@ public partial class MainWindow
 
     private async Task OpenCurrentTrackAsync(bool playing = true, TimeSpan? position = null, bool record = true)
     {
-        if (_queue.Current is not { } entry || _closed) return;
+        if (_queue.Current is not { } entry || _closed || _closingRequested) return;
         var request = ++_openTrackRequest;
         _isOpeningTrack = true;
         _currentTrack = entry.Track; _preparedId = null;
@@ -125,7 +132,7 @@ public partial class MainWindow
             // Stop flushes the previous output without reopening its decoder.
             _player.Stop(); ResetHandledBoundary(); UpdateNowPlaying(); UpdatePlayPauseButton();
             var opened = await _player.PlayAsync(entry.Track.Path, playing, position);
-            if (!opened || _closed || request != _openTrackRequest) return;
+            if (!opened || _closed || _closingRequested || request != _openTrackRequest) return;
             if (_queue.Current?.Id != entry.Id) { StopCurrentPlayback(); return; }
             ResetHandledBoundary();
             _player.SetVolume((float)VolumeSlider.Value);
@@ -151,6 +158,7 @@ public partial class MainWindow
         PositionSlider.Value = Math.Clamp(_player.Position.TotalSeconds, 0, PositionSlider.Maximum);
         DurationText.Text = FormatTime(DisplayDuration); ElapsedText.Text = FormatTime(_player.Position);
         if (_mediaSession is not null) _ = _mediaSession.SetTrackAsync(track);
+        RefreshListeningState();
     }
     private void PrepareNextTrack()
     {
@@ -204,7 +212,7 @@ public partial class MainWindow
     }
     private bool TrySeek(TimeSpan position)
     {
-        if (_closed || _isDesignPreview || _isOpeningTrack || _player.CurrentPath is null || !ReconcileRenderedBoundary()) return false;
+        if (_closed || _closingRequested || _isDesignPreview || _isOpeningTrack || _player.CurrentPath is null || !ReconcileRenderedBoundary()) return false;
         try
         {
             _player.Seek(position); ResetHandledBoundary(); PrepareNextTrack();
@@ -266,7 +274,7 @@ public partial class MainWindow
     }
     private void AdvanceQueue(bool manual = true)
     {
-        if (_closed || !ReconcileRenderedBoundary()) return;
+        if (_closed || _closingRequested || !ReconcileRenderedBoundary()) return;
         for (var attempts = 0; attempts < _queue.Entries.Count; attempts++)
         {
             var next = _queue.PeekNext(manual);
@@ -279,8 +287,7 @@ public partial class MainWindow
     }
     private async void RecordListening(Track track)
     {
-        try { await Task.Run(() => _store.RecordListening(track.Path)); }
-        catch (Exception error) { if (!_closed) SetStatus($"Couldn't save listening history: {error.Message}"); return; }
+        if (!await PersistLibraryChangeAsync(() => _store.RecordListening(track.Path), "save listening history")) return;
         if (_closed) return;
         var history = _history.FirstOrDefault(entry => SamePath(entry.Path, track.Path));
         if (history is null) { history = new() { Path = track.Path }; _history.Add(history); }
@@ -289,8 +296,8 @@ public partial class MainWindow
     }
     private void PlayPause_Click(object sender, RoutedEventArgs e)
     {
+        if (_closed || _closingRequested) return;
         if (_isDesignPreview) { _previewPlaying = !_previewPlaying; UpdatePlayPauseButton(); return; }
-        if (_closed) return;
         if (_isOpeningTrack) { PauseCurrentPlayback(); return; }
         if (!ReconcileRenderedBoundary()) return;
         if (_currentTrack is null)
@@ -307,7 +314,7 @@ public partial class MainWindow
         catch (Exception error) { StopCurrentPlayback(); UpdatePlayPauseButton(); SetStatus($"Couldn't resume: {error.Message}"); }
     }
     private void Previous_Click(object sender, RoutedEventArgs e)
-    { if (_closed || !ReconcileRenderedBoundary()) return; if (_player.Position.TotalSeconds > 3) TrySeek(TimeSpan.Zero); else if (_queue.Previous()) StartCurrentTrack(); }
+    { if (_closed || _closingRequested || !ReconcileRenderedBoundary()) return; if (_player.Position.TotalSeconds > 3) TrySeek(TimeSpan.Zero); else if (_queue.Previous()) StartCurrentTrack(); }
     private void Next_Click(object sender, RoutedEventArgs e) => AdvanceQueue();
     private void Shuffle_Click(object sender, RoutedEventArgs e)
     { FlushPreparedAudio(); _queue.Shuffle = !_queue.Shuffle; _queue.InvalidateNext(); UpdateQueueModes(); PrepareNextTrack(); SavePlaybackSession(false); }
@@ -324,7 +331,7 @@ public partial class MainWindow
     }
     private void MediaCommand(string command)
     {
-        if (_closed) return;
+        if (_closed || _closingRequested) return;
         switch (command)
         {
             case "play": if (!_player.IsPlaying && !_isOpeningTrack) PlayPause_Click(this, new()); break;
@@ -342,6 +349,7 @@ public partial class MainWindow
         if (_taskbarPlay is not null)
         { _taskbarPlay.Description = playing ? "Pause" : "Play"; _taskbarPlay.ImageSource = new DrawingImage(new GeometryDrawing((Brush)FindResource("InkBrush"), null, (Geometry)FindResource(playing ? "PauseIcon" : "PlayIcon"))); }
         _mediaSession?.Update(playing, _player.Position, DisplayDuration);
+        RefreshListeningState();
     }
     private void UiTimer_Tick(object? sender, EventArgs e)
     {
@@ -354,11 +362,13 @@ public partial class MainWindow
         if (DateTime.UtcNow - _lastMediaUpdate > TimeSpan.FromSeconds(1))
         { _lastMediaUpdate = DateTime.UtcNow; _mediaSession?.Update(_player.IsPlaying, _player.Position, DisplayDuration); }
         if (DateTime.UtcNow - _lastSessionSave > TimeSpan.FromSeconds(5)) { _lastSessionSave = DateTime.UtcNow; SavePlaybackSession(false); }
+        RefreshListeningState();
         DrawVisualizer();
     }
     private void DrawVisualizer()
     {
-        if (_reducedMotion || !ThemeAccessibility.AnimationsEnabled) { Visualizer.SetSpectrum([], false); return; }
+        if (_listeningView == "Mini") return;
+        if (_reducedMotion || !ThemeAccessibility.AnimationsEnabled) { PresentSpectrum([], false); return; }
         if (_isDesignPreview)
         {
             var values = new float[32];
@@ -368,9 +378,14 @@ public partial class MainWindow
                 values[i] = (float)((Math.Exp(-Math.Pow((x - .20) / .06, 2)) * .45 + Math.Exp(-Math.Pow((x - .40) / .09, 2)) * .7
                     + Math.Exp(-Math.Pow((x - .59) / .07, 2)) * .95 + Math.Exp(-Math.Pow((x - .78) / .09, 2)) * .5) * (.94 + .06 * Math.Sin(_previewFrame * .035 + i)));
             }
-            _previewFrame++; Visualizer.SetSpectrum(values, _previewPlaying); return;
+            _previewFrame++; PresentSpectrum(values, _previewPlaying); return;
         }
-        Visualizer.SetSpectrum(_player.GetSpectrum(), _player.IsPlaying);
+        PresentSpectrum(_player.GetSpectrum(), _player.IsPlaying);
+    }
+    private void PresentSpectrum(float[] values, bool active)
+    {
+        if (IsVisible && WindowState != WindowState.Minimized) Visualizer.SetSpectrum(values, active);
+        if (_focusWindow is { IsVisible: true } && _focusWindow.WindowState != WindowState.Minimized) _focusWindow.SetSpectrum(values, active);
     }
     private void PositionSlider_MouseDown(object sender, MouseButtonEventArgs e) { if (e.ChangedButton == MouseButton.Left) _isSeeking = true; }
     private void PositionSlider_MouseUp(object sender, MouseButtonEventArgs e)
@@ -380,7 +395,8 @@ public partial class MainWindow
         if (e.Key is not (Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown)) return;
         try { if (_currentTrack is not null) TrySeek(TimeSpan.FromSeconds(PositionSlider.Value)); } finally { _isSeeking = false; }
     }
-    private void VolumeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e) { _player?.SetVolume((float)e.NewValue); }
+    private void VolumeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    { _player?.SetVolume((float)e.NewValue); if (_listeningState is not null) _listeningState.Volume = e.NewValue; }
     private void Settings_Click(object sender, RoutedEventArgs e)
     {
         if (_closed) return;
@@ -388,9 +404,10 @@ public partial class MainWindow
         try { devices = _player.GetOutputDevices(); }
         catch (Exception error) { SetStatus(error.Message); devices = []; }
         var dialog = new SettingsWindow(devices, _outputDeviceId, _reducedMotion, _mediaSession?.UnavailableReason) { Owner = this };
-        if (dialog.ShowDialog() != true || _closed) return;
+        if (ShowAnimatedDialog(dialog) != true || _closed) return;
         try { if (ReconcileRenderedBoundary()) { _player.SetOutputDevice(dialog.OutputDeviceId); _outputDeviceId = dialog.OutputDeviceId; ResetHandledBoundary(); PrepareNextTrack(); } }
         catch (Exception error) { SetStatus($"Couldn't change output: {error.Message}"); }
         _reducedMotion = dialog.ReducedMotion; _player.AnalysisEnabled = !_reducedMotion && ThemeAccessibility.AnimationsEnabled; UpdatePlayPauseButton(); SavePlaybackSession(false);
+        UpdateListeningActivity();
     }
 }

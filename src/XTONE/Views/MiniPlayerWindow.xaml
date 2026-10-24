@@ -1,0 +1,207 @@
+<Window x:Class="XTONE.Views.MiniPlayerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:controls="clr-namespace:XTONE.Controls"
+        xmlns:views="clr-namespace:XTONE.Views"
+        Title="XTONE Mini" Width="440" Height="180" MinWidth="360" MinHeight="160"
+        WindowStyle="None" ResizeMode="CanResize" WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource PaperBrush}" Foreground="{DynamicResource InkBrush}"
+        FontFamily="{StaticResource AppFont}" FontSize="13" Topmost="{Binding MiniAlwaysOnTop}"
+        UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Display"
+        PreviewKeyDown="Window_PreviewKeyDown" Closing="Window_Closing" Deactivated="Window_Deactivated" Loaded="Window_Loaded"
+        KeyboardNavigation.TabNavigation="Cycle"
+        PreviewMouseLeftButtonDown="Window_SeekMouseDown" PreviewMouseLeftButtonUp="Window_SeekMouseUp">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="34" ResizeBorderThickness="5" GlassFrameThickness="0"
+                            CornerRadius="10" UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
+    <Window.Resources>
+        <Style x:Key="MiniCaptionButton" TargetType="Button" BasedOn="{StaticResource QuietButton}">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Padding" Value="7,3" />
+            <Setter Property="Height" Value="25" />
+            <Setter Property="MinWidth" Value="28" />
+            <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True" />
+        </Style>
+        <Style x:Key="MiniTransportButton" TargetType="Button" BasedOn="{StaticResource QuietButton}">
+            <Setter Property="Width" Value="31" />
+            <Setter Property="Height" Value="38" />
+            <Setter Property="Padding" Value="7" />
+            <Setter Property="IsEnabled" Value="False" />
+            <Style.Triggers>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding HasTrack}" Value="True" />
+                        <Condition Binding="{Binding IsOpening}" Value="False" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="IsEnabled" Value="True" />
+                </MultiDataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="MiniPlayButton" TargetType="Button" BasedOn="{StaticResource PlayButton}">
+            <Setter Property="Width" Value="42" />
+            <Setter Property="Height" Value="42" />
+            <Setter Property="IsEnabled" Value="False" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding HasTrack}" Value="True"><Setter Property="IsEnabled" Value="True" /></DataTrigger>
+                <DataTrigger Binding="{Binding IsOpening}" Value="True"><Setter Property="IsEnabled" Value="True" /></DataTrigger>
+                <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45" /></Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="MiniPinButton" TargetType="ToggleButton">
+            <Setter Property="FontFamily" Value="{StaticResource AppFont}" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="7,3" />
+            <Setter Property="Height" Value="25" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{DynamicResource KeyboardFocusStyle}" />
+            <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="5" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{DynamicResource HoverBrush}" /></Trigger>
+                <Trigger Property="IsChecked" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource SelectionBrush}" />
+                    <Setter Property="Foreground" Value="{DynamicResource SelectedTextBrush}" />
+                </Trigger>
+                <Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource FocusBrush}" /></Trigger>
+                <MultiTrigger>
+                    <MultiTrigger.Conditions><Condition Property="IsChecked" Value="True" /><Condition Property="IsKeyboardFocused" Value="True" /></MultiTrigger.Conditions>
+                    <Setter Property="BorderBrush" Value="{DynamicResource SelectedTextBrush}" />
+                </MultiTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="MiniSeekSlider" TargetType="Slider" BasedOn="{StaticResource SeekSlider}">
+            <Setter Property="SmallChange" Value="5" />
+            <Setter Property="LargeChange" Value="10" />
+            <Setter Property="IsEnabled" Value="False" />
+            <Style.Triggers>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding HasTrack}" Value="True" />
+                        <Condition Binding="{Binding CanSeek}" Value="True" />
+                        <Condition Binding="{Binding IsOpening}" Value="False" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter Property="IsEnabled" Value="True" />
+                </MultiDataTrigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Border Background="{DynamicResource PaperBrush}" BorderBrush="{DynamicResource LineBrush}"
+            BorderThickness="1" CornerRadius="9">
+        <Border.ContextMenu>
+            <ContextMenu>
+                <MenuItem Header="Show queue" Click="Queue_Click" />
+                <Separator />
+                <MenuItem Header="Volume up" Click="VolumeUp_Click" />
+                <MenuItem Header="Volume down" Click="VolumeDown_Click" />
+                <MenuItem Header="Mute / unmute" Click="Mute_Click" />
+            </ContextMenu>
+        </Border.ContextMenu>
+        <Grid Margin="14,6,14,9">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="26" />
+                <RowDefinition Height="*" MinHeight="57" />
+                <RowDefinition Height="24" />
+                <RowDefinition Height="16" />
+            </Grid.RowDefinitions>
+            <Grid Grid.Row="0">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <TextBlock Text="xTONE" FontSize="14" FontWeight="Black" VerticalAlignment="Center"
+                           AutomationProperties.Name="XTONE mini player" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button Content="Library" Click="Library_Click" Style="{StaticResource MiniCaptionButton}"
+                            ToolTip="Return to library · Esc" AutomationProperties.Name="Return to library" TabIndex="5" />
+                    <Button Content="Focus" Click="Focus_Click" Style="{StaticResource MiniCaptionButton}"
+                            ToolTip="Open focus mode" AutomationProperties.Name="Open focus mode" TabIndex="6" />
+                    <ToggleButton Content="On top" IsChecked="{Binding MiniAlwaysOnTop, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                  Style="{StaticResource MiniPinButton}" ToolTip="Keep mini player above other windows"
+                                  AutomationProperties.Name="Always on top" TabIndex="7" />
+                    <Button Click="Close_Click" Style="{StaticResource MiniCaptionButton}" Margin="3,0,-6,0"
+                            ToolTip="Close mini player and return to library" AutomationProperties.Name="Close mini player" TabIndex="8">
+                        <Path Data="M1,1 L11,11 M11,1 L1,11" Width="10" Height="10" Stretch="Uniform"
+                              Stroke="{DynamicResource InkBrush}" StrokeThickness="1.3" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <Grid Grid.Row="1" Margin="0,4,0,3">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="66" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <controls:AlbumArtwork Width="56" Height="56" HorizontalAlignment="Left" VerticalAlignment="Center"
+                                       Source="{Binding Artwork}" SourcePath="{Binding ArtworkPath}" FallbackBrush="{Binding CoverBrush}" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,9,0">
+                    <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="Bold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}" />
+                    <TextBlock FontSize="12" Foreground="{DynamicResource MutedBrush}" Margin="0,5,0,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding Artist}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Text" Value="{Binding Artist}" />
+                                <Style.Triggers><DataTrigger Binding="{Binding IsOpening}" Value="True"><Setter Property="Text" Value="Loading audio…" /></DataTrigger></Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Click="Previous_Click" Style="{StaticResource MiniTransportButton}" ToolTip="Previous track · Ctrl+Left"
+                            AutomationProperties.Name="Previous track" TabIndex="1">
+                        <Path Data="{StaticResource PreviousIcon}" Fill="{DynamicResource InkBrush}" Width="15" Height="15" Stretch="Uniform" />
+                    </Button>
+                    <Button x:Name="PlayPauseButton" Click="PlayPause_Click" Style="{StaticResource MiniPlayButton}" Margin="3,0"
+                            ToolTip="{Binding PlayPauseLabel}" AutomationProperties.Name="{Binding PlayPauseLabel}" TabIndex="0">
+                        <Grid Width="19" Height="20">
+                            <Path Data="{StaticResource PlayIcon}" Fill="{DynamicResource AccentTextBrush}" Stretch="Uniform" Margin="2,1,0,1">
+                                <Path.Style><Style TargetType="Path"><Setter Property="Visibility" Value="Visible" /><Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsPlaying}" Value="True"><Setter Property="Visibility" Value="Collapsed" /></DataTrigger>
+                                    <DataTrigger Binding="{Binding IsOpening}" Value="True"><Setter Property="Visibility" Value="Collapsed" /></DataTrigger>
+                                </Style.Triggers></Style></Path.Style>
+                            </Path>
+                            <Path Data="{StaticResource PauseIcon}" Fill="{DynamicResource AccentTextBrush}" Stretch="Uniform" Margin="2,1">
+                                <Path.Style><Style TargetType="Path"><Setter Property="Visibility" Value="Collapsed" /><Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsPlaying}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger>
+                                    <DataTrigger Binding="{Binding IsOpening}" Value="True"><Setter Property="Visibility" Value="Collapsed" /></DataTrigger>
+                                </Style.Triggers></Style></Path.Style>
+                            </Path>
+                            <Path Data="M4,4 H16 V16 H4 Z" Fill="{DynamicResource AccentTextBrush}" Stretch="Uniform" Margin="4">
+                                <Path.Style><Style TargetType="Path"><Setter Property="Visibility" Value="Collapsed" /><Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsOpening}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger>
+                                </Style.Triggers></Style></Path.Style>
+                            </Path>
+                        </Grid>
+                    </Button>
+                    <Button Click="Next_Click" Style="{StaticResource MiniTransportButton}" ToolTip="Next track · Ctrl+Right"
+                            AutomationProperties.Name="Next track" TabIndex="2">
+                        <Path Data="{StaticResource NextIcon}" Fill="{DynamicResource InkBrush}" Width="15" Height="15" Stretch="Uniform" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <views:ListeningSlider x:Name="PositionSlider" Grid.Row="2" Minimum="0" Maximum="{Binding SeekMaximum}"
+                    Style="{StaticResource MiniSeekSlider}" ValueChanged="PositionSlider_ValueChanged"
+                    AutomationValueCommitted="PositionSlider_AutomationValueCommitted"
+                    PreviewKeyDown="PositionSlider_KeyDown" PreviewKeyUp="PositionSlider_KeyUp"
+                    PreviewMouseWheel="PositionSlider_MouseWheel"
+                    LostMouseCapture="PositionSlider_LostMouseCapture" LostKeyboardFocus="PositionSlider_LostKeyboardFocus"
+                    AutomationProperties.Name="Playback position" ToolTip="Seek · arrow keys move five seconds" TabIndex="3" />
+            <Grid Grid.Row="3" VerticalAlignment="Center">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <TextBlock x:Name="ElapsedText" Text="0:00" FontSize="10" Foreground="{DynamicResource MutedBrush}" />
+                <TextBlock Grid.Column="1" Text="{Binding Quality}" FontSize="10" Foreground="{DynamicResource MutedBrush}"
+                           TextTrimming="CharacterEllipsis" TextAlignment="Center" Margin="10,0" ToolTip="{Binding Status}" />
+                <TextBlock Grid.Column="2" Text="{Binding DurationText}" FontSize="10" Foreground="{DynamicResource MutedBrush}" />
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

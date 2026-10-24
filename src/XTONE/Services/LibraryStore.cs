@@ -580,6 +580,7 @@ public sealed class LibraryStore
 
     private static void NormalizeSession(PlaybackSession session)
     {
+        session.FocusVisualization = session.FocusVisualization is "Bars" or "Off" ? session.FocusVisualization : "Ribbon";
         session.QueuePaths = (session.QueuePaths ?? []).Where(path => TryNormalizePath(path, out _)).Select(NormalizePath).ToList();
         session.Volume = double.IsFinite(session.Volume) ? Math.Clamp(session.Volume, 0, 1) : .72;
         session.PositionSeconds = double.IsFinite(session.PositionSeconds)
@@ -897,6 +898,7 @@ public sealed class LibraryStore
         PositionSeconds = session.PositionSeconds, Volume = session.Volume, Shuffle = session.Shuffle,
         Repeat = session.Repeat, RepeatMode = session.RepeatMode,
         OutputDeviceId = session.OutputDeviceId, ReducedMotion = session.ReducedMotion,
+        MiniAlwaysOnTop = session.MiniAlwaysOnTop, FocusVisualization = session.FocusVisualization,
         LastSection = session.LastSection, SavedUtc = session.SavedUtc
     };
 }

@@ -20,10 +20,10 @@ public partial class MainWindow
     private async Task LoadLibraryAsync()
     {
         var snapshot = await Task.Run(_store.Load);
-        if (_closed) return;
+        if (_closed || _closingRequested) return;
         ApplySnapshot(snapshot);
         if (_snapshotSession is { } session) await RestoreSessionAsync(session);
-        if (_closed) return;
+        if (_closed || _closingRequested) return;
         _libraryReady = true;
         _watcher.Changed += Watcher_Changed;
         _watcher.Configure(_folders);
@@ -47,7 +47,7 @@ public partial class MainWindow
 
     private async void Watcher_Changed(object? sender, EventArgs e)
     {
-        if (_closed) return;
+        if (_closed || _closingRequested) return;
         await Dispatcher.InvokeAsync(async () =>
         {
             if (_scanCancellation is not null) { _refreshPending = true; return; }
@@ -57,11 +57,11 @@ public partial class MainWindow
 
     private async Task ScanAsync(IEnumerable<string>? paths, bool quiet = false)
     {
-        if (_isDesignPreview || _closed) return;
+        if (_isDesignPreview || _closed || _closingRequested) return;
         // A manual import must retain its selected inputs while another scan finishes.
         if (paths is not null) { paths = paths.ToList(); await _scanGate.WaitAsync(); }
         else if (!await _scanGate.WaitAsync(0)) { _refreshPending = true; return; }
-        if (_closed) { _scanGate.Release(); return; }
+        if (_closed || _closingRequested) { _scanGate.Release(); return; }
         _scanCancellation = new CancellationTokenSource();
         ScanCancelButton.Visibility = Visibility.Visible;
         ScanProgress.Visibility = Visibility.Visible;
@@ -80,7 +80,7 @@ public partial class MainWindow
             var token = _scanCancellation.Token;
             var snapshot = paths is null ? await _store.RefreshAsync(progress, token)
                 : await _store.ImportAsync(paths, progress, token);
-            if (_closed) return;
+            if (_closed || _closingRequested) return;
             ApplySnapshot(snapshot);
             SetStatus(_tracks.Any(track => track.IsMissing)
                 ? $"{_tracks.Count(track => track.IsMissing):N0} missing files · use Locate file to reconnect" : "Library up to date");
