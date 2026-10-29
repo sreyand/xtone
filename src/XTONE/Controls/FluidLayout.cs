@@ -385,8 +385,8 @@ public static class FluidLayout
         {
             if (!Different(previous, target.Rect)) { Settle(target); return; }
             EnsureTransform();
-            var scaleX = Math.Clamp(previous.Width / target.Rect.Width, .15, 6);
-            var scaleY = Math.Clamp(previous.Height / target.Rect.Height, .15, 6);
+            var scaleX = 1d; // Resize at native layout speed; never stretch labels.
+            var scaleY = 1d;
             var translateX = (previous.X - target.Rect.X) / target.ParentScaleX
                 - (1 - scaleX) * Host.RenderSize.Width * target.Origin.X;
             var translateY = (previous.Y - target.Rect.Y) / target.ParentScaleY
@@ -442,6 +442,6 @@ public static class FluidLayout
     private static bool InViewport(Rect rect, Rect viewport) => !rect.IsEmpty && rect.Width > 1 && rect.Height > 1 && rect.IntersectsWith(viewport);
     private static bool Different(Rect first, Rect second) => Math.Abs(first.X - second.X) > .15 || Math.Abs(first.Y - second.Y) > .15
         || Math.Abs(first.Width - second.Width) > .15 || Math.Abs(first.Height - second.Height) > .15;
-    private static DoubleAnimation Animation(double from, double to) => new(from, to, TimeSpan.FromMilliseconds(200)) { EasingFunction = Ease, FillBehavior = FillBehavior.Stop };
+    private static DoubleAnimation Animation(double from, double to) => new(from, to, TimeSpan.FromMilliseconds(160)) { EasingFunction = Ease, FillBehavior = FillBehavior.Stop };
     private static DoubleAnimation FrozenAnimation(double from, double to) { var animation = Animation(from, to); animation.Freeze(); return animation; }
 }

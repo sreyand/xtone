@@ -196,7 +196,7 @@ public partial class MainWindow
         UiMotion.Enabled = motion;
         XTONE.Controls.FluidLayout.MotionEnabled = motion;
         _listeningState.MotionEnabled = motion;
-        _player.AnalysisEnabled = motion && (mainVisible || focusVisible && _listeningState.Visualization != "Off");
+        _player.AnalysisEnabled = motion && (mainVisible && Visualizer.IsVisible || focusVisible && _listeningState.Visualization != "Off");
         _uiTimer.Interval = TimeSpan.FromMilliseconds(mainVisible || focusVisible ? 40 : _miniWindow is { IsVisible: true } ? 120 : 250);
         RefreshListeningState();
     }

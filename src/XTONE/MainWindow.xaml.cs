@@ -38,7 +38,9 @@ public partial class MainWindow : Window
         MinHeight = Math.Min(MinHeight, SystemParameters.WorkArea.Height);
         AlbumItems.ItemsSource = _albumRows; ArtistItems.ItemsSource = _artistCards;
         PlaylistItems.ItemsSource = _playlistCards; QueueItems.ItemsSource = _queue.Entries;
+        ScanProgress.IsIndeterminate = true;
         InitializeListeningViews();
+        RefreshInterfaceState();
         _player.PlaybackStopped += Player_PlaybackStopped;
         _player.NextTrackStarted += Player_NextTrackStarted;
         _uiTimer.Tick += UiTimer_Tick;
@@ -50,7 +52,7 @@ public partial class MainWindow : Window
         InitializeWindowsControls();
         _ = UiMotion.FadeInAsync(this);
         try { if (_isDesignPreview) LoadDesignPreview(); else await LoadLibraryAsync(); }
-        catch (Exception error) { if (!_closed) { ShowSection("Albums"); SetStatus($"Couldn't open the library: {error.Message}"); } }
+        catch (Exception error) { if (!_closed) { _libraryLoadFailed = true; _libraryLoadError = error.Message; ShowSection("Albums"); SetStatus($"Couldn’t open your library: {error.Message}"); } }
         if (_closed || _closingRequested) return;
         _uiTimer.Start(); UpdateListeningActivity(); DrawVisualizer();
         var arguments = Environment.GetCommandLineArgs();
@@ -72,6 +74,7 @@ public partial class MainWindow : Window
         if (_focusWindow is not null) _focusWindow.IsEnabled = false;
         if (_miniWindow is not null) _miniWindow.IsEnabled = false;
         _focusWindow?.PrepareToHide(); _miniWindow?.PrepareToHide();
+        _noticeTimer?.Stop();
         _scanCancellation?.Cancel(); _uiTimer.Stop(); StopCurrentPlayback();
         var fades = ListeningWindows().Where(window => window.IsVisible).Select(window => UiMotion.FadeOutAsync(window)).ToArray();
         // Let this cancelled Closing event return before issuing the final Close.
@@ -89,6 +92,7 @@ public partial class MainWindow : Window
     private void ShowSection(string section)
     {
         _section = section is "Albums" or "Library" or "Artists" or "Playlists" or "Favorites" or "History" ? section : "Albums";
+        if (_section == "Artists" && _artistCards.Count == 0) _section = "Library";
         _activeAlbum = null; _activePlaylist = null;
         AlbumDetailPanel.Visibility = EmptyState.Visibility = Visibility.Collapsed;
         AlbumScroll.Visibility = _section == "Albums" ? Visibility.Visible : Visibility.Collapsed;
@@ -98,7 +102,7 @@ public partial class MainWindow : Window
         ViewFilter.Visibility = SortPicker.Visibility = _section is "Library" or "Favorites" or "History" ? Visibility.Visible : Visibility.Collapsed;
         PageTitle.Text = _section; CreateButton.Content = _section == "Playlists" ? "Create playlist" : "Create album";
         CreateButton.Visibility = _section is "Albums" or "Playlists" ? Visibility.Visible : Visibility.Collapsed;
-        SearchBox.Clear();
+        SearchBox.Clear(); SearchBox.Visibility = Visibility.Collapsed; ViewFilter.SelectedIndex = 0;
         foreach (var navigation in new[] { LibraryNav, AlbumsNav, ArtistsNav, PlaylistsNav, FavoritesNav, HistoryNav })
         {
             var selected = Equals(navigation.Tag, _section);
@@ -107,20 +111,13 @@ public partial class MainWindow : Window
             navigation.FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal;
         }
         UpdateSectionSubtitle(); UpdateVisiblePage();
+        RefreshInterfaceState();
         FadePageIn(_section switch { "Albums" => AlbumScroll, "Artists" => ArtistsPanel,
             "Playlists" => PlaylistsPanel, _ => LibraryPanel });
     }
     private void UpdateSectionSubtitle()
-    {
-        if (_activeAlbum is not null) return;
-        PageSubtitle.Text = _section switch
-        {
-            "Library" => $"{_tracks.Count:N0} tracks", "Favorites" => $"{_tracks.Count(track => track.IsFavorite):N0} favorites",
-            "History" => $"{_history.Count:N0} tracks played", "Artists" => $"{_artistCards.Count:N0} artists",
-            "Playlists" => $"{_playlistCards.Count:N0} playlists",
-            _ => _isDesignPreview ? "128 tracks · 32 albums" : $"{_tracks.Count:N0} tracks · {_albumCards.Count:N0} albums"
-        };
-    }
+    { PageSubtitle.Text = ""; PageSubtitle.Visibility = Visibility.Collapsed; }
+
     private async void ImportFolder_Click(object sender, RoutedEventArgs e)
     {
         if (_isDesignPreview) return;
@@ -135,20 +132,22 @@ public partial class MainWindow : Window
     }
     private void Section_Click(object sender, RoutedEventArgs e) { if ((sender as Button)?.Tag is string section) ShowSection(section); }
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) { if (IsLoaded) UpdateVisiblePage(); }
-    private void Search_Click(object sender, RoutedEventArgs e) { SearchBox.Visibility = Visibility.Visible; SearchBox.Focus(); SearchBox.SelectAll(); }
+    private void Search_Click(object sender, RoutedEventArgs e) { if (_tracks.Count == 0 && !_isDesignPreview) return; if (_activeAlbum is not null) ShowSection("Library"); SearchBox.Visibility = Visibility.Visible; RefreshInterfaceState(); SearchBox.Focus(); SearchBox.SelectAll(); }
     private void AlbumCard_Click(object sender, RoutedEventArgs e) { if ((sender as Button)?.Tag is AlbumCard album) OpenAlbum(album); }
     private void OpenAlbum(AlbumCard album)
     {
         _activeAlbum = album;
         AlbumScroll.Visibility = EmptyState.Visibility = ArtistsPanel.Visibility = PlaylistsPanel.Visibility = LibraryPanel.Visibility = Visibility.Collapsed;
         ViewFilter.Visibility = SortPicker.Visibility = Visibility.Collapsed; AlbumDetailPanel.Visibility = Visibility.Visible;
-        PageTitle.Text = _activePlaylist is null ? "Album" : "Playlist";
-        PageSubtitle.Text = _activePlaylist?.SmartRule is { } rule ? $"Smart playlist · {rule}" : album.IsCreatedLocally ? "A personal album, stored on this PC" : "From your local files";
+        PageTitle.Text = album.Title; DetailTitle.Visibility = Visibility.Collapsed;
+        PageSubtitle.Text = "";
         DetailTitle.Text = album.Title; DetailArtist.Text = album.Artist;
-        DetailMeta.Text = $"{album.Tracks.Count:N0} tracks   ·   {FormatDuration(album.Tracks)}"; DetailNotes.Text = album.Notes ?? "";
+        DetailMeta.Text = $"{album.Tracks.Count:N0} {(album.Tracks.Count == 1 ? "track" : "tracks")} · {FormatDuration(album.Tracks)}"; DetailNotes.Text = album.Notes ?? "";
         DetailArtwork.Source = album.Artwork; DetailArtwork.SourcePath = album.ArtworkPath; DetailTracks.ItemsSource = album.Tracks;
         EditCollectionButton.Content = _activePlaylist is not null || album.IsCreatedLocally ? "Edit" : "Make personal album";
+        EditCollectionButton.Visibility = _activePlaylist is not null || album.IsCreatedLocally ? Visibility.Visible : Visibility.Collapsed;
         DeleteCollectionButton.Visibility = _activePlaylist is not null || album.IsCreatedLocally ? Visibility.Visible : Visibility.Collapsed;
+        RefreshInterfaceState();
         FadePageIn(AlbumDetailPanel);
     }
     private void BackToAlbums_Click(object sender, RoutedEventArgs e) => ShowSection(_section);
@@ -186,7 +185,7 @@ public partial class MainWindow : Window
         {
             switch (e.Key)
             {
-                case Key.F: Search_Click(sender, e); break; case Key.O: ImportFiles_Click(sender, e); break;
+                case Key.F: Search_Click(sender, e); break; case Key.O: AddMusic_Click(sender, e); break;
                 case Key.Q: Queue_Click(sender, e); break; case Key.OemComma: Settings_Click(sender, e); break;
                 case Key.D: if (_currentTrack is { } track) ToggleFavorite(track); break;
                 case Key.Right: Next_Click(sender, e); break; case Key.Left: Previous_Click(sender, e); break;
@@ -199,7 +198,7 @@ public partial class MainWindow : Window
         else if (e.Key == Key.Escape)
         {
             if (QueuePanel.Visibility == Visibility.Visible) _ = SetQueueVisibleAsync(false);
-            else if (SearchBox.Visibility == Visibility.Visible) { SearchBox.Clear(); SearchBox.Visibility = Visibility.Collapsed; SearchToolbarButton.Focus(); }
+            else if (SearchBox.Visibility == Visibility.Visible) { SearchBox.Clear(); SearchBox.Visibility = Visibility.Collapsed; ViewFilter.SelectedIndex = 0; RefreshInterfaceState(); SearchToolbarButton.Focus(); }
             else if (_activeAlbum is not null) ShowSection(_section); else return;
             e.Handled = true;
         }
@@ -221,29 +220,32 @@ public partial class MainWindow : Window
     private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         if (MainContent is null) return;
-        var compact = ActualWidth < 1240 || ActualHeight < 800;
-        var duration = IsLoaded && ShowActivated ? 200 : 0;
-        UiMotion.AnimateGridLength(SidebarColumn, ColumnDefinition.WidthProperty, new GridLength(compact ? 240 : 276), duration);
-        UiMotion.AnimateThickness(MainContent, MarginProperty, compact ? new(26, 44, 22, 16) : new(42, 68, 28, 24), duration);
-        UiMotion.AnimateGridLength(MainHeaderRow, RowDefinition.HeightProperty, new GridLength(compact ? 88 : 110), duration);
-        UiMotion.AnimateGridLength(PlayerDockRow, RowDefinition.HeightProperty, new GridLength(compact ? 152 : 176), duration);
-        foreach (var row in new[] { VisualizerRow, QualitySpacerRow }) UiMotion.AnimateGridLength(row, RowDefinition.HeightProperty, new GridLength(compact ? 38 : 58), duration);
-        foreach (var row in new[] { TransportRow, QualityInfoRow }) UiMotion.AnimateGridLength(row, RowDefinition.HeightProperty, new GridLength(compact ? 64 : 68), duration);
-        UiMotion.AnimateDouble(Visualizer, HeightProperty, compact ? 38 : 58, duration);
-        UiMotion.AnimateDouble(PageTitle, TextBlock.FontSizeProperty, compact ? 48 : 64, duration);
-        UiMotion.AnimateDouble(PageTitle, TextBlock.LineHeightProperty, compact ? 64 : 80, duration);
-        UiMotion.AnimateDouble(PageSubtitle, TextBlock.FontSizeProperty, compact ? 16 : 20, duration);
-        UiMotion.AnimateThickness(SidebarContents, MarginProperty, compact ? new(12, 42, 12, 12) : new(12, 54, 12, 12), duration);
-        foreach (var nav in new[] { LibraryNav, AlbumsNav, ArtistsNav, PlaylistsNav })
-        { UiMotion.AnimateDouble(nav, HeightProperty, compact ? 46 : 58, duration); UiMotion.AnimateDouble(nav, Control.FontSizeProperty, compact ? 18 : 20, duration); }
-        foreach (var nav in new[] { FavoritesNav, HistoryNav })
-        { UiMotion.AnimateDouble(nav, HeightProperty, compact ? 38 : 44, duration); UiMotion.AnimateDouble(nav, Control.FontSizeProperty, compact ? 15 : 16, duration); }
+        // Layout follows the pointer directly. Only visual feedback is animated;
+        // interpolating layout clocks during native resize made the shell lag behind.
+        var scale = Math.Clamp((ActualWidth - 960) / 640, 0, 1);
+        scale = scale * scale * (3 - 2 * scale);
+        double Between(double small, double large) => small + (large - small) * scale;
+        SidebarColumn.Width = new GridLength(Between(205, 236));
+        MainContent.Margin = new Thickness(Between(28, 48), 44, Between(24, 40), 20);
+        MainHeaderRow.Height = new GridLength(64);
+        VisualizerRow.Height = QualitySpacerRow.Height = new GridLength(0);
+        TransportRow.Height = new GridLength(48);
+        QualityInfoRow.Height = new GridLength(0);
+        Visualizer.Height = 0;
+        PageTitle.FontSize = 32;
+        PageTitle.LineHeight = 42;
+        PageSubtitle.FontSize = 13;
+        SidebarContents.Margin = new Thickness(14, 38, 14, 16);
+        foreach (var nav in new[] { LibraryNav, AlbumsNav, ArtistsNav, PlaylistsNav, FavoritesNav, HistoryNav })
+        { nav.Height = 44; nav.FontSize = 14; }
+        MusicDropOverlay.Margin = new Thickness(SidebarColumn.Width.Value + 20, 52, 24, 24);
+        RefreshInterfaceState();
     }
 
     private void FadePageIn(FrameworkElement element)
     {
         if (!IsLoaded || !ShowActivated || !UiMotion.Enabled) return;
-        _ = UiMotion.FadeElementIn(element, 160);
+        _ = UiMotion.FadeElementIn(element, UiMotion.SurfaceMilliseconds);
     }
 
     private bool? ShowAnimatedDialog(Window dialog)

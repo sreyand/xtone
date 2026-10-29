@@ -16,6 +16,7 @@ public partial class MainWindow
     private bool _closed;
     private bool _libraryReady;
     private bool _refreshPending;
+    private bool _watcherSubscribed;
 
     private async Task LoadLibraryAsync()
     {
@@ -25,7 +26,8 @@ public partial class MainWindow
         if (_snapshotSession is { } session) await RestoreSessionAsync(session);
         if (_closed || _closingRequested) return;
         _libraryReady = true;
-        _watcher.Changed += Watcher_Changed;
+        RefreshInterfaceState();
+        if (!_watcherSubscribed) { _watcher.Changed += Watcher_Changed; _watcherSubscribed = true; }
         _watcher.Configure(_folders);
         await ScanAsync(null, quiet: true);
     }
@@ -58,22 +60,37 @@ public partial class MainWindow
     private async Task ScanAsync(IEnumerable<string>? paths, bool quiet = false)
     {
         if (_isDesignPreview || _closed || _closingRequested) return;
+        if (paths is null && _folders.Count == 0 && _tracks.Count == 0) { RefreshInterfaceState(); return; }
         // A manual import must retain its selected inputs while another scan finishes.
-        if (paths is not null) { paths = paths.ToList(); await _scanGate.WaitAsync(); }
+        if (paths is not null)
+        {
+            paths = paths.ToList();
+            if (_scanCancellation is not null) SetStatus("Music queued. Finishing the current folder refresh…");
+            await _scanGate.WaitAsync();
+        }
         else if (!await _scanGate.WaitAsync(0)) { _refreshPending = true; return; }
         if (_closed || _closingRequested) { _scanGate.Release(); return; }
         _scanCancellation = new CancellationTokenSource();
-        ScanCancelButton.Visibility = Visibility.Visible;
-        ScanProgress.Visibility = Visibility.Visible;
+        var cancellation = _scanCancellation;
+        var priorPaths = _tracks.Select(track => track.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var warnings = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        _showScanProgress = paths is not null || !quiet;
+        if (_showScanProgress) _emptyImportNotice = null;
+        ScanCancelButton.Visibility = _showScanProgress ? Visibility.Visible : Visibility.Collapsed;
+        ScanProgress.Visibility = _showScanProgress ? Visibility.Visible : Visibility.Collapsed;
         ScanProgress.IsIndeterminate = true;
-        SetStatus(paths is null ? "Checking music folders…" : "Importing music…");
+        if (_showScanProgress) SetStatus(paths is null ? "Checking music folders…" : "Reading your music…", false);
+        RefreshInterfaceState();
         var progress = new Progress<LibraryProgress>(value =>
         {
-            if (_closed) return;
+            if (_closed || !ReferenceEquals(_scanCancellation, cancellation)) return;
+            if (value.Message.StartsWith("Folder unavailable:", StringComparison.OrdinalIgnoreCase)) warnings.Add(value.Message);
+            if (!_showScanProgress) return;
             ScanStatus.Text = value.Total > 0 ? $"{value.Message}  {value.Done:N0}/{value.Total:N0}" : value.Message;
             ScanProgress.IsIndeterminate = value.Total == 0;
             ScanProgress.Maximum = Math.Max(1, value.Total);
             ScanProgress.Value = value.Done;
+            RefreshInterfaceState();
         });
         try
         {
@@ -82,8 +99,27 @@ public partial class MainWindow
                 : await _store.ImportAsync(paths, progress, token);
             if (_closed || _closingRequested) return;
             ApplySnapshot(snapshot);
-            SetStatus(_tracks.Any(track => track.IsMissing)
-                ? $"{_tracks.Count(track => track.IsMissing):N0} missing files · use Locate file to reconnect" : "Library up to date");
+            var added = _tracks.Count(track => !priorPaths.Contains(track.Path));
+            var issues = _tracks.Count(track => track.IsMissing || !string.IsNullOrWhiteSpace(track.Error));
+            if (paths is not null)
+            {
+                var summary = added > 0 ? $"Added {added:N0} {(added == 1 ? "track" : "tracks")}." : "No new tracks found. These files may already be in your library, or contain no supported music.";
+                if (issues > 0) summary += $" {issues:N0} {(issues == 1 ? "file needs" : "files need")} attention. Use File details or Locate file.";
+                if (warnings.Count > 0) summary += $" {warnings.Count:N0} {(warnings.Count == 1 ? "folder was" : "folders were")} unavailable.";
+                _emptyImportNotice = _tracks.Count == 0 ? summary : null;
+                if (issues > 0 || warnings.Count > 0) SetScanStatus(summary);
+                else
+                {
+                    SetStatus("", false); _scanOwnedNotice = null;
+                    if (_tracks.Count == 0) _emptyImportNotice = "No supported audio found. Choose FLAC, WAV, ALAC (M4A), or MP3 files.";
+                    ShowNotice(added > 0 ? summary : "No new tracks found.");
+                }
+            }
+            else if (issues > 0 || warnings.Count > 0)
+                SetScanStatus(issues > 0 ? $"{issues:N0} files need attention. Use File details or Locate file." : "A music folder is unavailable. Reconnect it and rescan.");
+            else if (!quiet) { SetStatus("", false); _scanOwnedNotice = null; ShowNotice("Library refreshed."); }
+            else if (_scanOwnedNotice is not null && ScanStatus.Text == _scanOwnedNotice)
+            { SetStatus("", false); _scanOwnedNotice = null; _emptyImportNotice = null; }
         }
         catch (OperationCanceledException) { if (!_closed) SetStatus("Scan cancelled. Your saved library is intact."); }
         catch (Exception error) { if (!_closed) SetStatus($"Couldn't update the library: {error.Message}"); }
@@ -93,8 +129,10 @@ public partial class MainWindow
             _scanGate.Release();
             if (!_closed)
             {
+                _showScanProgress = false;
                 ScanCancelButton.Visibility = Visibility.Collapsed;
                 ScanProgress.Visibility = Visibility.Collapsed;
+                RefreshInterfaceState();
                 if (_refreshPending) { _refreshPending = false; _ = ScanAsync(null, true); }
             }
         }
@@ -102,7 +140,16 @@ public partial class MainWindow
 
     private void CancelScan_Click(object sender, RoutedEventArgs e) { _refreshPending = false; _scanCancellation?.Cancel(); }
     private async void Rescan_Click(object sender, RoutedEventArgs e) => await ScanAsync(null);
-    private void SetStatus(string message) { ScanStatus.Text = message; ScanStatus.ToolTip = message; }
+    private void SetScanStatus(string message)
+    { SetStatus(message); _scanOwnedNotice = message; }
+
+    private void SetStatus(string message, bool attention = true)
+    {
+        ScanStatus.Text = message; ScanStatus.ToolTip = message;
+        _statusNeedsAttention = attention && !string.IsNullOrWhiteSpace(message) && message != "Library up to date";
+        if (_tracks.Count == 0 && attention) _emptyImportNotice = message;
+        RefreshInterfaceState();
+    }
 
     private void RebuildCollections()
     {
@@ -124,7 +171,7 @@ public partial class MainWindow
                 ArtworkPath = tracks.Select(track => track.ArtworkPath).FirstOrDefault(path => path is not null) });
         }
         _artistCards.Clear();
-        foreach (var group in _tracks.GroupBy(track => track.Artist, StringComparer.OrdinalIgnoreCase).OrderBy(group => group.Key))
+        foreach (var group in _tracks.Where(track => !string.IsNullOrWhiteSpace(track.Artist) && !track.Artist.Equals("Unknown artist", StringComparison.OrdinalIgnoreCase)).GroupBy(track => track.Artist, StringComparer.OrdinalIgnoreCase).OrderBy(group => group.Key))
             _artistCards.Add(new(group.Key, group.Count()));
         _playlistCards.Clear();
         foreach (var playlist in _playlists) _playlistCards.Add(new(playlist, ResolvePlaylist(playlist)));
@@ -203,6 +250,7 @@ public partial class MainWindow
     private void UpdateVisiblePage()
     {
         if (!IsInitialized || SearchBox is null) return;
+        RefreshInterfaceState();
         var query = SearchBox.Text.Trim();
         if (_activeAlbum is not null) return;
         if (_section == "Albums")
@@ -211,18 +259,23 @@ public partial class MainWindow
                 || album.Artist.Contains(query, StringComparison.OrdinalIgnoreCase) || album.Tracks.Any(track => track.Title.Contains(query, StringComparison.OrdinalIgnoreCase))).ToList();
             _albumRows.Clear();
             for (var i = 0; i < albums.Count; i += _albumColumns) _albumRows.Add(new(albums.Skip(i).Take(_albumColumns).ToList(), _albumColumns));
-            SetEmpty(albums.Count == 0, _tracks.Count == 0 ? "Your albums, in one place." : "No matching albums.");
+            SetEmpty(albums.Count == 0, _tracks.Count == 0 ? "Your albums, in one place." : "No results");
         }
         else if (_section is "Library" or "Favorites" or "History")
         {
             var tracks = FilteredTracks().ToList(); LibraryTracks.ItemsSource = tracks;
-            SetEmpty(tracks.Count == 0, _section == "Favorites" ? "Keep your favorites close." : _section == "History" ? "Your listening starts here." : "No tracks here yet.");
+            SetEmpty(tracks.Count == 0, _section == "Favorites" ? "No favorites yet" : _section == "History" ? "No listening history yet" : "No tracks");
         }
-        else if (_section == "Artists") ArtistItems.ItemsSource = _artistCards.Where(artist => query.Length == 0 || artist.Name.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+        else if (_section == "Artists")
+        {
+            var artists = _artistCards.Where(artist => query.Length == 0 || artist.Name.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+            ArtistItems.ItemsSource = artists; SetEmpty(artists.Count == 0, "No results");
+        }
         else if (_section == "Playlists")
         {
-            PlaylistItems.ItemsSource = _playlistCards.Where(playlist => query.Length == 0 || playlist.Name.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
-            PlaylistEmptyState.Visibility = _playlistCards.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            var playlists = _playlistCards.Where(playlist => query.Length == 0 || playlist.Name.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+            PlaylistItems.ItemsSource = playlists;
+            SetEmpty(playlists.Count == 0, query.Length > 0 ? "No results" : "No playlists yet");
         }
     }
 
@@ -230,12 +283,15 @@ public partial class MainWindow
     {
         EmptyState.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
         EmptyHeadline.Text = headline;
-        EmptyDescription.Text = _tracks.Count == 0 ? "Add a music folder to start your collection."
-            : SearchBox.Text.Length > 0 ? "Try another title, artist, or track." : "Import music or choose a different filter.";
+        EmptyDescription.Text = SearchBox.Text.Length > 0 || ViewFilter.SelectedIndex > 0 ? "Try another search or clear your filters."
+            : _section == "Favorites" ? "Favorite a track to keep it here."
+            : _section == "History" ? "Tracks you listen to will appear here."
+            : _section == "Playlists" ? "Use Create playlist to bring a few tracks together." : "Add music to grow your library.";
+        RefreshInterfaceState();
     }
     private void AlbumViewport_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        var columns = Math.Clamp((int)Math.Round((e.NewSize.Width + 24) / 288), 1, 6);
+        var columns = Math.Clamp((int)Math.Floor((e.NewSize.Width + 20) / 220), 1, 6);
         if (columns == _albumColumns) return;
         _albumColumns = columns; UpdateVisiblePage();
     }

@@ -116,8 +116,8 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="26" />
                 <RowDefinition Height="*" MinHeight="57" />
-                <RowDefinition Height="24" />
-                <RowDefinition Height="16" />
+                <RowDefinition Height="28" />
+                <RowDefinition Height="18" />
             </Grid.RowDefinitions>
             <Grid Grid.Row="0">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
@@ -131,7 +131,7 @@
                     <ToggleButton Content="On top" IsChecked="{Binding MiniAlwaysOnTop, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                   Style="{StaticResource MiniPinButton}" ToolTip="Keep mini player above other windows"
                                   AutomationProperties.Name="Always on top" TabIndex="7" />
-                    <Button Click="Close_Click" Style="{StaticResource MiniCaptionButton}" Margin="3,0,-6,0"
+                    <Button Click="Close_Click" Style="{StaticResource MiniCaptionButton}" Margin="3,0,0,0"
                             ToolTip="Close mini player and return to library" AutomationProperties.Name="Close mini player" TabIndex="8">
                         <Path Data="M1,1 L11,11 M11,1 L1,11" Width="10" Height="10" Stretch="Uniform"
                               Stroke="{DynamicResource InkBrush}" StrokeThickness="1.3" />
@@ -144,7 +144,7 @@
                 <controls:AlbumArtwork Width="56" Height="56" HorizontalAlignment="Left" VerticalAlignment="Center"
                                        Source="{Binding Artwork}" SourcePath="{Binding ArtworkPath}" FallbackBrush="{Binding CoverBrush}" />
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,9,0">
-                    <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="Bold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}" />
+                    <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}" />
                     <TextBlock FontSize="12" Foreground="{DynamicResource MutedBrush}" Margin="0,5,0,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding Artist}">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">
@@ -198,7 +198,7 @@
             <Grid Grid.Row="3" VerticalAlignment="Center">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                 <TextBlock x:Name="ElapsedText" Text="0:00" FontSize="10" Foreground="{DynamicResource MutedBrush}" />
-                <TextBlock Grid.Column="1" Text="{Binding Quality}" FontSize="10" Foreground="{DynamicResource MutedBrush}"
+                <TextBlock Grid.Column="1" Text="{Binding Status}" FontSize="10" Foreground="{DynamicResource MutedBrush}"
                            TextTrimming="CharacterEllipsis" TextAlignment="Center" Margin="10,0" ToolTip="{Binding Status}" />
                 <TextBlock Grid.Column="2" Text="{Binding DurationText}" FontSize="10" Foreground="{DynamicResource MutedBrush}" />
             </Grid>

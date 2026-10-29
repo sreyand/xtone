@@ -112,14 +112,14 @@ public partial class MainWindow
     private void AlbumPlay_Click(object sender, RoutedEventArgs e)
     { if ((sender as MenuItem)?.Tag is AlbumCard album && album.Tracks.FirstOrDefault(track => track.CanPlay) is { } track) PlayTrack(track, album.Tracks); }
     private void AlbumQueue_Click(object sender, RoutedEventArgs e)
-    { if ((sender as MenuItem)?.Tag is AlbumCard album) { foreach (var track in album.Tracks.Where(track => track.CanPlay)) _queue.Append(track); QueueChanged(); SetStatus($"Added {album.Title} to queue"); } }
+    { if ((sender as MenuItem)?.Tag is AlbumCard album) { foreach (var track in album.Tracks.Where(track => track.CanPlay)) _queue.Append(track); QueueChanged(); ShowNotice($"Added {album.Title} to queue"); } }
     private Track? ActionTrack(object sender) => (sender as MenuItem)?.Tag as Track ?? (_activeAlbum is null ? LibraryTracks.SelectedItem : DetailTracks.SelectedItem) as Track;
     private void TrackPlay_Click(object sender, RoutedEventArgs e)
     { if (ActionTrack(sender) is { } track) PlayTrack(track, _activeAlbum?.Tracks ?? LibraryTracks.Items.OfType<Track>().ToList()); }
     private void TrackNext_Click(object sender, RoutedEventArgs e)
-    { if (ActionTrack(sender) is { CanPlay: true } track) { _queue.InsertNext(track); QueueChanged(); SetStatus($"Playing next: {track.Title}"); } }
+    { if (ActionTrack(sender) is { CanPlay: true } track) { _queue.InsertNext(track); QueueChanged(); ShowNotice($"Playing next: {track.Title}"); } }
     private void TrackQueue_Click(object sender, RoutedEventArgs e)
-    { if (ActionTrack(sender) is { CanPlay: true } track) { _queue.Append(track); QueueChanged(); SetStatus($"Added to queue: {track.Title}"); } }
+    { if (ActionTrack(sender) is { CanPlay: true } track) { _queue.Append(track); QueueChanged(); ShowNotice($"Added to queue: {track.Title}"); } }
     private void TrackFavorite_Click(object sender, RoutedEventArgs e) { if (ActionTrack(sender) is { } track) ToggleFavorite(track); }
     private async void ToggleFavorite(Track track)
     {
@@ -147,7 +147,7 @@ public partial class MainWindow
         _pendingFavorites.Remove(path);
         if (saved) SetFavoriteInView(path, favorite);
         RebuildCollections(); LibraryTracks.Items.Refresh(); DetailTracks.Items.Refresh();
-        if (saved) SetStatus(favorite ? $"Added {track.Title} to favorites" : $"Removed {track.Title} from favorites");
+        if (saved) ShowNotice(favorite ? $"Added {track.Title} to favorites" : $"Removed {track.Title} from favorites");
     }
     private void OverlayPendingFavorites()
     {
@@ -187,13 +187,13 @@ public partial class MainWindow
             if (relinksCurrent) await OpenCurrentTrackAsync(false, position, false);
             else if (_queue.Current?.Track is { } refreshed && _currentTrack is { } playing && SamePath(refreshed.Path, playing.Path))
             { _currentTrack = refreshed; UpdateNowPlaying(); }
-            QueueChanged(); SetStatus(relinksCurrent ? "File reconnected. Playback is paused at your previous position." : "File reconnected across your library and collections");
+            QueueChanged(); ShowNotice(relinksCurrent ? "File reconnected. Playback is paused at your previous position." : "File reconnected across your library and collections");
         }
         catch (Exception error) { SetStatus($"Couldn't reconnect this file: {error.Message}"); }
     }
     private void Queue_Click(object sender, RoutedEventArgs e)
-    { _ = SetQueueVisibleAsync(!_queueRequested); }
-    private void QueueChanged() { FlushPreparedAudio(); PrepareNextTrack(); SavePlaybackSession(false); }
+    { if (_queue.Entries.Count > 0) _ = SetQueueVisibleAsync(!_queueRequested); }
+    private void QueueChanged() { FlushPreparedAudio(); PrepareNextTrack(); RefreshInterfaceState(); SavePlaybackSession(false); }
     private void QueuePlay_Click(object sender, RoutedEventArgs e) { if (_queue.Select(QueueItems.SelectedIndex)) StartCurrentTrack(); }
     private void QueueUp_Click(object sender, RoutedEventArgs e) => MoveQueued(-1);
     private void QueueDown_Click(object sender, RoutedEventArgs e) => MoveQueued(1);
@@ -204,7 +204,7 @@ public partial class MainWindow
         _queue.Move(index, target); QueueItems.SelectedIndex = target; QueueChanged();
     }
     private void QueueRemove_Click(object sender, RoutedEventArgs e)
-    { if (!_queue.Remove(QueueItems.SelectedIndex)) SetStatus("Choose another queued track to remove. The current track stays in the queue."); else QueueChanged(); }
+    { if (!_queue.Remove(QueueItems.SelectedIndex)) ShowNotice("Choose another queued track to remove. The current track stays in the queue."); else QueueChanged(); }
     private void QueueClear_Click(object sender, RoutedEventArgs e) { _queue.ClearUpcoming(); QueueChanged(); }
     private void Queue_KeyDown(object sender, KeyEventArgs e)
     {

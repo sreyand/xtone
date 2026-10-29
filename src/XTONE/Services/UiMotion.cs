@@ -12,6 +12,8 @@ namespace XTONE.Services;
 public static class UiMotion
 {
     private static readonly ConditionalWeakTable<DependencyObject, MotionState> States = new();
+    public const int SurfaceMilliseconds = 220;
+    public const int WindowMilliseconds = 180;
     private static bool _enabled = true;
     private static long _generation;
 
@@ -31,8 +33,8 @@ public static class UiMotion
                 if (state.Prepared && target is Window window && window.ShowActivated)
                     window.SetCurrentValue(UIElement.OpacityProperty, state.RestingOpacity ?? 1d);
                 state.Prepared = false;
-                if (state.HoverEnabled && target is ButtonBase button && state.HoverOpacity is { } opacity)
-                    button.SetCurrentValue(UIElement.OpacityProperty, opacity);
+                if (state.HoverEnabled && target is ButtonBase button)
+                    UpdateHover(button);
             }
         }
     }
@@ -322,19 +324,28 @@ public static class UiMotion
     private static void HoverPressed(object sender, MouseButtonEventArgs e)
     {
         if (sender is not ButtonBase button) return;
-        var state = StateFor(button); var rest = state.HoverOpacity ?? 1;
-        AnimateDouble(button, UIElement.OpacityProperty, Enabled && button.IsEnabled
-            ? rest * (e.ButtonState == MouseButtonState.Pressed ? .87 : button.IsMouseOver ? .95 : 1) : rest, 100);
+        UpdateHover(button, e.ButtonState == MouseButtonState.Pressed);
     }
     private static void HoverEnabledChanged(object sender, DependencyPropertyChangedEventArgs e) { if (sender is ButtonBase button) UpdateHover(button); }
     private static void HoverUnloaded(object sender, RoutedEventArgs e) { if (sender is ButtonBase button) RestoreHover(button, StateFor(button)); }
-    private static void UpdateHover(ButtonBase button)
+    private static void UpdateHover(ButtonBase button, bool pressed = false)
     {
-        var state = StateFor(button); var rest = state.HoverOpacity ?? 1;
-        AnimateDouble(button, UIElement.OpacityProperty, Enabled && button.IsEnabled && button.IsMouseOver ? rest * .95 : rest, 130);
+        if (button.Template?.FindName("HoverSurface", button) is FrameworkElement surface)
+        {
+            var active = button.IsEnabled && (button.IsMouseOver || pressed);
+            AnimateDouble(surface, UIElement.OpacityProperty, active ? pressed ? .75 : 1 : 0,
+                Enabled ? SurfaceMilliseconds : 0);
+            return;
+        }
+        // Solid blue and artwork buttons keep their content at full opacity.
+        // Their established focus/pressed cues remain in their own templates.
     }
     private static void RestoreHover(ButtonBase button, MotionState state)
-    { if (state.HoverOpacity is { } opacity) SetImmediately(button, UIElement.OpacityProperty, opacity); }
+    {
+        if (button.Template?.FindName("HoverSurface", button) is FrameworkElement surface)
+            SetImmediately(surface, UIElement.OpacityProperty, 0d);
+        if (state.HoverOpacity is { } opacity) SetImmediately(button, UIElement.OpacityProperty, opacity);
+    }
 
     private sealed class MotionState
     {

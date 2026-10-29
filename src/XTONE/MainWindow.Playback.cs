@@ -150,6 +150,7 @@ public partial class MainWindow
     private TimeSpan DisplayDuration => _player.CurrentPath is null ? _currentTrack?.Duration ?? TimeSpan.Zero : _player.Duration;
     private void UpdateNowPlaying()
     {
+        RefreshInterfaceState();
         if (_currentTrack is not { } track) return;
         NowPlayingTitle.Text = track.Title; NowPlayingArtist.Text = track.Artist;
         NowPlayingArtwork.Source = null; NowPlayingArtwork.SourcePath = track.ArtworkPath;
@@ -350,6 +351,7 @@ public partial class MainWindow
         { _taskbarPlay.Description = playing ? "Pause" : "Play"; _taskbarPlay.ImageSource = new DrawingImage(new GeometryDrawing((Brush)FindResource("InkBrush"), null, (Geometry)FindResource(playing ? "PauseIcon" : "PlayIcon"))); }
         _mediaSession?.Update(playing, _player.Position, DisplayDuration);
         RefreshListeningState();
+        RefreshInterfaceState();
     }
     private void UiTimer_Tick(object? sender, EventArgs e)
     {
@@ -384,7 +386,7 @@ public partial class MainWindow
     }
     private void PresentSpectrum(float[] values, bool active)
     {
-        if (IsVisible && WindowState != WindowState.Minimized) Visualizer.SetSpectrum(values, active);
+        if (Visualizer.IsVisible && IsVisible && WindowState != WindowState.Minimized) Visualizer.SetSpectrum(values, active);
         if (_focusWindow is { IsVisible: true } && _focusWindow.WindowState != WindowState.Minimized) _focusWindow.SetSpectrum(values, active);
     }
     private void PositionSlider_MouseDown(object sender, MouseButtonEventArgs e) { if (e.ChangedButton == MouseButton.Left) _isSeeking = true; }

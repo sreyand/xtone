@@ -113,28 +113,31 @@ public partial class FocusWindow : Window
         _fittingContent = true;
         try
         {
-            var compact = ActualHeight < 760 || ActualWidth < 720;
-            var duration = UiMotion.Enabled && IsLoaded && IsVisible && ShowActivated && !_closed ? 200 : 0;
+            var space = Math.Clamp((ActualHeight - 600) / 320, 0, 1);
+            double SizeBetween(double small, double large) => small + (large - small) * space;
+            const int duration = 0; // Geometry follows native resize without queued layout clocks.
             void Number(DependencyObject target, DependencyProperty property, double value) => UiMotion.AnimateDouble(target, property, value, duration);
             void Space(FrameworkElement target, DependencyProperty property, Thickness value) => UiMotion.AnimateThickness(target, property, value, duration);
-            UiMotion.AnimateGridLength(HeaderRow, RowDefinition.HeightProperty, new GridLength(compact ? 56 : 64), duration);
-            PlaybackControls.Width = Math.Clamp(ActualWidth - 56, 280, 660);
-            Space(PlaybackControls, MarginProperty, new Thickness(28, 0, 28, compact ? 10 : 18));
-            Number(PlayPauseButton, WidthProperty, compact ? 60 : 68);
-            Number(PlayPauseButton, HeightProperty, compact ? 60 : 68);
-            Space(PlaybackCaption, MarginProperty, new Thickness(0, 0, 0, compact ? 10 : 18));
-            Space(MetadataPanel, MarginProperty, new Thickness(0, compact ? 12 : 20, 0, 0));
-            Number(TrackTitle, TextBlock.FontSizeProperty, compact ? 26 : 34);
-            Number(TrackArtist, TextBlock.FontSizeProperty, compact ? 16 : 18);
-            Number(TrackAlbum, TextBlock.FontSizeProperty, compact ? 11 : 12);
-            Number(Visualizer, HeightProperty, compact ? 28 : 64);
-            Space(Visualizer, MarginProperty, new Thickness(0, compact ? 6 : 10, 0, 0));
-            Space(HeroScroll, Control.PaddingProperty, new Thickness(28, compact ? 4 : 8, 28, compact ? 8 : 18));
-            Space(SeekPanel, MarginProperty, new Thickness(0, compact ? 8 : 12, 0, 0));
+            UiMotion.AnimateGridLength(HeaderRow, RowDefinition.HeightProperty, new GridLength(52), duration);
+            var contentWidth = Math.Clamp(ActualWidth - 58, 1, 660);
+            HeroContent.Width = contentWidth;
+            TrackTitle.MaxWidth = TrackArtist.MaxWidth = TrackAlbum.MaxWidth = contentWidth;
+            PlaybackControls.Width = Math.Clamp(contentWidth, 280, 660);
+            Space(PlaybackControls, MarginProperty, new Thickness(28, 0, 28, SizeBetween(10, 18)));
+            Number(PlayPauseButton, WidthProperty, 52);
+            Number(PlayPauseButton, HeightProperty, 52);
+            Space(PlaybackCaption, MarginProperty, new Thickness(0, 0, 0, SizeBetween(10, 18)));
+            Space(MetadataPanel, MarginProperty, new Thickness(0, SizeBetween(12, 20), 0, 0));
+            Number(TrackTitle, TextBlock.FontSizeProperty, SizeBetween(24, 28));
+            Number(TrackArtist, TextBlock.FontSizeProperty, 14);
+            Number(TrackAlbum, TextBlock.FontSizeProperty, 12);
+            Number(Visualizer, HeightProperty, SizeBetween(24, 40));
+            Space(Visualizer, MarginProperty, new Thickness(0, 8, 0, 0));
+            Space(HeroScroll, Control.PaddingProperty, new Thickness(28, 8, 28, SizeBetween(8, 18)));
+            Space(SeekPanel, MarginProperty, new Thickness(0, 12, 0, 0));
 
-            // Fit art against the current interpolated chrome, rather than its final target.
-            // Viewport size changes repeat this measurement as adaptive controls settle.
-            var contentWidth = Math.Clamp(ActualWidth - 56, 1, 660);
+            // Fit art against measured controls and footer. Constraining hero width
+            // above also makes long metadata ellipsize inside the viewport.
             var measure = new Size(contentWidth, double.PositiveInfinity);
             PlaybackControls.Measure(new Size(Math.Max(1, ActualWidth), double.PositiveInfinity));
             FooterBar.Measure(new Size(Math.Max(1, ActualWidth), double.PositiveInfinity));
