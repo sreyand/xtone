@@ -35,7 +35,7 @@ public partial class MainWindow
             }
             _albumCards.Add(new AlbumCard { Id = $"preview-{i}", Title = names[i], Artist = artists[i], Artwork = artwork });
         }
-        ShowSection("Albums");
+        RebuildMusicItems(); ShowSection("Albums");
         NowPlayingTitle.Text = "Glasshouse";
         NowPlayingArtist.Text = "Mira Vale";
         NowPlayingArtwork.Source = _albumCards[0].Artwork;
@@ -84,3 +84,4 @@ public partial class MainWindow
     }
 
 }
+

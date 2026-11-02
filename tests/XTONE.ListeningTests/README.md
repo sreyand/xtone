@@ -24,3 +24,5 @@ dotnet run --project tests/XTONE.ListeningTests/XTONE.ListeningTests.csproj
 ```
 
 Required controls are checked for positive size and bounds inside each layout. Component renders do not verify taskbar behavior or an actual foreground desktop interaction.
+
+Pointer-focus regressions exercise the rendered Main/Focus/Mini transports and the actual new-folder dialog primary action with component `Focus()` calls. They verify focused control chrome does not gain a persistent border while the shared keyboard-only `FocusVisualStyle` remains available. Mini pin checks preserve the checked appearance and clear the unchecked appearance. Music list geometry checks folder and loose-track icon alignment and horizontal insets. These are component-state checks, not injected mouse/keyboard input or proof of a live desktop gesture.

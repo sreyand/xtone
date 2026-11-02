@@ -15,6 +15,25 @@ internal static class Program
         Directory.CreateDirectory(root);
         try
         {
+            Run("session write bursts retain only the newest pending snapshot", () =>
+            {
+                using var entered = new ManualResetEventSlim(); using var release = new ManualResetEventSlim();
+                var positions = new List<double>(); var errors = new List<Exception>();
+                var pump = new SessionWritePump(snapshot => { lock (positions) positions.Add(snapshot.PositionSeconds); if (snapshot.PositionSeconds == 0) { entered.Set(); True(release.Wait(TimeSpan.FromSeconds(5))); } }, errors.Add);
+                var drain = pump.Enqueue(new PlaybackSession { PositionSeconds = 0 });
+                True(entered.Wait(TimeSpan.FromSeconds(5)));
+                for (var i = 1; i <= 1000; i++) drain = pump.Enqueue(new PlaybackSession { PositionSeconds = i });
+                release.Set(); True(drain.Wait(TimeSpan.FromSeconds(5)));
+                Equal(2, positions.Count); Equal(1000d, positions[^1]); Equal(0, errors.Count);
+            });
+            Run("session writer recovers after a failed write", () =>
+            {
+                var errors = 0; double saved = -1;
+                var pump = new SessionWritePump(snapshot => { if (snapshot.PositionSeconds == 1) throw new IOException("fixture failure"); saved = snapshot.PositionSeconds; }, _ => Interlocked.Increment(ref errors));
+                pump.Enqueue(new PlaybackSession { PositionSeconds = 1 }).GetAwaiter().GetResult();
+                pump.Enqueue(new PlaybackSession { PositionSeconds = 2 }).GetAwaiter().GetResult();
+                Equal(1, errors); Equal(2d, saved);
+            });
             Run("starts with a useful empty player presentation", () =>
             {
                 var state = new NowPlayingState();
@@ -192,7 +211,7 @@ internal static class Program
                 {
                     QueuePaths = [a, b, a], CurrentIndex = 2, PositionSeconds = 12.5,
                     Volume = .33, Shuffle = true, RepeatMode = "All", OutputDeviceId = "fixture-output",
-                    ReducedMotion = true, LastSection = "Favorites", MiniAlwaysOnTop = true, FocusVisualization = "Bars"
+                    ReducedMotion = true, LastSection = "Favorites", MiniAlwaysOnTop = true, FocusVisualization = "Bars", MusicView = "List"
                 });
                 var restored = new LibraryStore(data).GetSession();
                 Equal(3, restored.QueuePaths.Count);
@@ -203,6 +222,7 @@ internal static class Program
                 True(restored.Shuffle && restored.ReducedMotion && restored.MiniAlwaysOnTop);
                 Equal("All", restored.RepeatMode);
                 Equal("Bars", restored.FocusVisualization);
+                Equal("List", restored.MusicView);
                 Equal("Favorites", restored.LastSection);
                 Equal("fixture-output", restored.OutputDeviceId);
                 restored.QueuePaths.Clear();
@@ -212,6 +232,7 @@ internal static class Program
                 Equal(3, untouched.QueuePaths.Count);
                 True(untouched.MiniAlwaysOnTop);
                 Equal("Bars", untouched.FocusVisualization);
+                Equal("List", untouched.MusicView);
             });
 
             Run("retains new session fields when recovering through the saved library", () =>
@@ -245,6 +266,31 @@ internal static class Program
                     var store = new LibraryStore(data);
                     store.SaveSession(new PlaybackSession { FocusVisualization = value! });
                     Equal("Ribbon", new LibraryStore(data).GetSession().FocusVisualization);
+                }
+            });
+
+            Run("retired collection destinations fall back without changing the saved listening session", () =>
+            {
+                foreach (var destination in new[] { "Playlists", "custom-album-123", "", "Unknown" })
+                {
+                    var data = Path.Combine(root, "retired-section-" + Guid.NewGuid().ToString("N"));
+                    var track = Path.Combine(root, "preserved-track.flac");
+                    var store = new LibraryStore(data);
+                    store.SaveSession(new PlaybackSession
+                    {
+                        QueuePaths = [track, track], CurrentIndex = 1, PositionSeconds = 13,
+                        Volume = .24, LastSection = destination, MiniAlwaysOnTop = true,
+                        FocusVisualization = "Off", ReducedMotion = true
+                    });
+                    var restored = new LibraryStore(data).GetSession();
+                    Equal("Library", restored.LastSection);
+                    Equal(2, restored.QueuePaths.Count);
+                    True(restored.QueuePaths.All(path => path == track));
+                    Equal(1, restored.CurrentIndex);
+                    Equal(13d, restored.PositionSeconds);
+                    Equal(.24, restored.Volume);
+                    True(restored.MiniAlwaysOnTop && restored.ReducedMotion);
+                    Equal("Off", restored.FocusVisualization);
                 }
             });
 

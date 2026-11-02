@@ -4,7 +4,7 @@
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:controls="clr-namespace:XTONE.Controls"
         xmlns:views="clr-namespace:XTONE.Views"
-        Title="XTONE · Focus" Width="920" Height="820" MinWidth="640" MinHeight="600"
+        Icon="/XTONE;component/Assets/xtone.ico" Title="XTONE · Focus" Width="920" Height="820" MinWidth="640" MinHeight="600"
         WindowStyle="None" ResizeMode="CanResize" WindowStartupLocation="CenterScreen"
         Background="{DynamicResource PaperBrush}" Foreground="{DynamicResource InkBrush}"
         FontFamily="{StaticResource AppFont}" FontSize="15"

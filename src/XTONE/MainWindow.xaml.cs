@@ -15,15 +15,12 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _uiTimer = new() { Interval = TimeSpan.FromMilliseconds(40) };
     private readonly List<Track> _tracks = [];
     private readonly List<string> _folders = [];
-    private readonly List<CustomAlbum> _customAlbums = [];
-    private readonly List<CustomPlaylist> _playlists = [];
-    private readonly ObservableCollection<AlbumCard> _albumCards = [];
-    private readonly ObservableCollection<ArtistSummary> _artistCards = [];
-    private readonly ObservableCollection<PlaylistSummary> _playlistCards = [];
+    private readonly ResettableObservableCollection<AlbumCard> _albumCards = [];
+    private readonly ResettableObservableCollection<ArtistSummary> _artistCards = [];
     private AlbumCard? _activeAlbum;
-    private CustomPlaylist? _activePlaylist;
     private Track? _currentTrack;
     private string _section = "Albums";
+    private Button HeaderAddMusicButton => NewFolderButton;
     private bool _isSeeking;
     private readonly bool _isDesignPreview = Environment.GetCommandLineArgs().Contains("--preview");
     private bool _previewPlaying = true;
@@ -37,7 +34,7 @@ public partial class MainWindow : Window
         MinWidth = Math.Min(MinWidth, SystemParameters.WorkArea.Width);
         MinHeight = Math.Min(MinHeight, SystemParameters.WorkArea.Height);
         AlbumItems.ItemsSource = _albumRows; ArtistItems.ItemsSource = _artistCards;
-        PlaylistItems.ItemsSource = _playlistCards; QueueItems.ItemsSource = _queue.Entries;
+        QueueItems.ItemsSource = _queue.Entries;
         ScanProgress.IsIndeterminate = true;
         InitializeListeningViews();
         RefreshInterfaceState();
@@ -52,7 +49,7 @@ public partial class MainWindow : Window
         InitializeWindowsControls();
         _ = UiMotion.FadeInAsync(this);
         try { if (_isDesignPreview) LoadDesignPreview(); else await LoadLibraryAsync(); }
-        catch (Exception error) { if (!_closed) { _libraryLoadFailed = true; _libraryLoadError = error.Message; ShowSection("Albums"); SetStatus($"Couldn’t open your library: {error.Message}"); } }
+        catch (Exception error) { if (!_closed) { _libraryLoadFailed = true; _libraryLoadError = error.Message; ShowSection("Library"); SetStatus($"Couldn’t open your library: {error.Message}"); } }
         if (_closed || _closingRequested) return;
         _uiTimer.Start(); UpdateListeningActivity(); DrawVisualizer();
         var arguments = Environment.GetCommandLineArgs();
@@ -67,6 +64,7 @@ public partial class MainWindow : Window
         e.Cancel = true;
         if (_closingRequested) return;
         _closingRequested = true;
+        CancelLibraryPresentation();
         ++_viewTransitionVersion;
         SavePlaybackSession(false);
         IsEnabled = false;
@@ -91,19 +89,17 @@ public partial class MainWindow : Window
     }
     private void ShowSection(string section)
     {
-        _section = section is "Albums" or "Library" or "Artists" or "Playlists" or "Favorites" or "History" ? section : "Albums";
+        _section = section is "Albums" or "Library" or "Artists" or "Favorites" or "History" ? section : "Albums";
         if (_section == "Artists" && _artistCards.Count == 0) _section = "Library";
-        _activeAlbum = null; _activePlaylist = null;
+        _activeAlbum = null;
         AlbumDetailPanel.Visibility = EmptyState.Visibility = Visibility.Collapsed;
         AlbumScroll.Visibility = _section == "Albums" ? Visibility.Visible : Visibility.Collapsed;
         LibraryPanel.Visibility = _section is "Library" or "Favorites" or "History" ? Visibility.Visible : Visibility.Collapsed;
         ArtistsPanel.Visibility = _section == "Artists" ? Visibility.Visible : Visibility.Collapsed;
-        PlaylistsPanel.Visibility = _section == "Playlists" ? Visibility.Visible : Visibility.Collapsed;
         ViewFilter.Visibility = SortPicker.Visibility = _section is "Library" or "Favorites" or "History" ? Visibility.Visible : Visibility.Collapsed;
-        PageTitle.Text = _section; CreateButton.Content = _section == "Playlists" ? "Create playlist" : "Create album";
-        CreateButton.Visibility = _section is "Albums" or "Playlists" ? Visibility.Visible : Visibility.Collapsed;
+        PageTitle.Text = _section == "Albums" ? "Music" : _section == "Library" ? "All tracks" : _section == "History" ? "Recently played" : _section;
         SearchBox.Clear(); SearchBox.Visibility = Visibility.Collapsed; ViewFilter.SelectedIndex = 0;
-        foreach (var navigation in new[] { LibraryNav, AlbumsNav, ArtistsNav, PlaylistsNav, FavoritesNav, HistoryNav })
+        foreach (var navigation in new[] { LibraryNav, AlbumsNav, ArtistsNav, FavoritesNav, HistoryNav })
         {
             var selected = Equals(navigation.Tag, _section);
             navigation.Background = selected ? (Brush)FindResource("SelectionBrush") : Brushes.Transparent;
@@ -112,41 +108,34 @@ public partial class MainWindow : Window
         }
         UpdateSectionSubtitle(); UpdateVisiblePage();
         RefreshInterfaceState();
-        FadePageIn(_section switch { "Albums" => AlbumScroll, "Artists" => ArtistsPanel,
-            "Playlists" => PlaylistsPanel, _ => LibraryPanel });
+        FadePageIn(_section switch { "Albums" => AlbumScroll, "Artists" => ArtistsPanel, _ => LibraryPanel });
     }
     private void UpdateSectionSubtitle()
     { PageSubtitle.Text = ""; PageSubtitle.Visibility = Visibility.Collapsed; }
 
-    private async void ImportFolder_Click(object sender, RoutedEventArgs e)
-    {
-        if (_isDesignPreview) return;
-        var picker = new OpenFolderDialog { Title = "Choose a music folder", Multiselect = true };
-        if (picker.ShowDialog(this) == true) await ScanAsync(picker.FolderNames);
-    }
-    private async void ImportFiles_Click(object sender, RoutedEventArgs e)
-    {
-        if (_isDesignPreview) return;
-        var picker = new OpenFileDialog { Title = "Add music to XTONE", Filter = "Audio files|*.flac;*.wav;*.mp3;*.m4a;*.mp4|All files|*.*", Multiselect = true };
-        if (picker.ShowDialog(this) == true) await ScanAsync(picker.FileNames);
-    }
     private void Section_Click(object sender, RoutedEventArgs e) { if ((sender as Button)?.Tag is string section) ShowSection(section); }
-    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) { if (IsLoaded) UpdateVisiblePage(); }
+    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) { if (IsLoaded) QueueVisiblePageRefresh(); }
     private void Search_Click(object sender, RoutedEventArgs e) { if (_tracks.Count == 0 && !_isDesignPreview) return; if (_activeAlbum is not null) ShowSection("Library"); SearchBox.Visibility = Visibility.Visible; RefreshInterfaceState(); SearchBox.Focus(); SearchBox.SelectAll(); }
     private void AlbumCard_Click(object sender, RoutedEventArgs e) { if ((sender as Button)?.Tag is AlbumCard album) OpenAlbum(album); }
     private void OpenAlbum(AlbumCard album)
     {
         _activeAlbum = album;
-        AlbumScroll.Visibility = EmptyState.Visibility = ArtistsPanel.Visibility = PlaylistsPanel.Visibility = LibraryPanel.Visibility = Visibility.Collapsed;
+        DetailHero.Tag = album;
+        FolderOptionsButton.Tag = album;
+        AlbumScroll.Visibility = EmptyState.Visibility = ArtistsPanel.Visibility = LibraryPanel.Visibility = Visibility.Collapsed;
         ViewFilter.Visibility = SortPicker.Visibility = Visibility.Collapsed; AlbumDetailPanel.Visibility = Visibility.Visible;
-        PageTitle.Text = album.Title; DetailTitle.Visibility = Visibility.Collapsed;
+        PageTitle.Text = album.Title;
         PageSubtitle.Text = "";
-        DetailTitle.Text = album.Title; DetailArtist.Text = album.Artist;
-        DetailMeta.Text = $"{album.Tracks.Count:N0} {(album.Tracks.Count == 1 ? "track" : "tracks")} · {FormatDuration(album.Tracks)}"; DetailNotes.Text = album.Notes ?? "";
+        DetailArtist.Text = album.Artist;
+        DetailMeta.Text = $"{album.Tracks.Count:N0} {(album.Tracks.Count == 1 ? "track" : "tracks")} · {FormatDuration(album.Tracks)}";
         DetailArtwork.Source = album.Artwork; DetailArtwork.SourcePath = album.ArtworkPath; DetailTracks.ItemsSource = album.Tracks;
-        EditCollectionButton.Content = _activePlaylist is not null || album.IsCreatedLocally ? "Edit" : "Make personal album";
-        EditCollectionButton.Visibility = _activePlaylist is not null || album.IsCreatedLocally ? Visibility.Visible : Visibility.Collapsed;
-        DeleteCollectionButton.Visibility = _activePlaylist is not null || album.IsCreatedLocally ? Visibility.Visible : Visibility.Collapsed;
+        var folderAlbum = !string.IsNullOrWhiteSpace(album.FolderPath) || _isDesignPreview;
+        System.Windows.Automation.AutomationProperties.SetName(DetailTracks, folderAlbum ? "Folder tracks" : "Artist tracks");
+        DetailEmptyState.Text = folderAlbum ? "No tracks in this folder." : "No tracks for this artist.";
+        DetailArtwork.Visibility = folderAlbum ? Visibility.Visible : Visibility.Collapsed;
+        DetailArtworkColumn.Width = new GridLength(folderAlbum ? 160 : 0);
+        DetailSummary.Margin = folderAlbum ? new Thickness(24, 3, 0, 0) : new Thickness(0);
+        OpenAlbumFolderButton.Visibility = AddFolderTracksButton.Visibility = FolderOptionsButton.Visibility = !string.IsNullOrWhiteSpace(album.FolderPath) ? Visibility.Visible : Visibility.Collapsed;
         RefreshInterfaceState();
         FadePageIn(AlbumDetailPanel);
     }
@@ -154,13 +143,11 @@ public partial class MainWindow : Window
     private void Artist_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as Button)?.Tag is not ArtistSummary artist) return;
-        ShowSection("Albums"); SearchBox.Visibility = Visibility.Visible; SearchBox.Text = artist.Name;
-    }
-    private void Playlist_Click(object sender, RoutedEventArgs e)
-    {
-        if ((sender as Button)?.Tag is not PlaylistSummary playlist) return;
-        _activePlaylist = playlist.Playlist;
-        OpenAlbum(new AlbumCard { Id = playlist.Playlist.Id, Title = playlist.Name, Artist = playlist.Playlist.SmartRule is null ? "Private playlist" : "Smart playlist", Tracks = ResolvePlaylist(playlist.Playlist) });
+        ShowSection("Artists");
+        var tracks = _tracks.Where(track => track.ArtistCredits.Contains(artist.Name, StringComparer.OrdinalIgnoreCase))
+            .OrderBy(track => track.Album, StringComparer.OrdinalIgnoreCase).ThenBy(track => track.DiscNumber)
+            .ThenBy(track => track.TrackNumber).ThenBy(track => track.Title, StringComparer.OrdinalIgnoreCase).ToList();
+        OpenAlbum(new AlbumCard { Id = "artist:" + artist.Name, Title = artist.Name, Artist = "", Tracks = tracks });
     }
     private void Tracks_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
@@ -173,7 +160,11 @@ public partial class MainWindow : Window
         { PlayTrack(track, ((ListBox)sender).Items.OfType<Track>().ToList()); e.Handled = true; }
     }
     private void Track_RightClick(object sender, MouseButtonEventArgs e)
-    { if (FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject) is { } item) { item.IsSelected = true; item.Focus(); } }
+    {
+        if (FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject) is not { } item) return;
+        if (!item.IsSelected && sender is ListBox list) { list.SelectedItems.Clear(); item.IsSelected = true; }
+        item.Focus();
+    }
     private static T? FindAncestor<T>(DependencyObject? item) where T : DependencyObject
     {
         while (item is not null) { if (item is T result) return result; item = VisualTreeHelper.GetParent(item); }
@@ -185,7 +176,7 @@ public partial class MainWindow : Window
         {
             switch (e.Key)
             {
-                case Key.F: Search_Click(sender, e); break; case Key.O: AddMusic_Click(sender, e); break;
+                case Key.F: Search_Click(sender, e); break; case Key.O: OpenMusicFolder_Click(sender, e); break;
                 case Key.Q: Queue_Click(sender, e); break; case Key.OemComma: Settings_Click(sender, e); break;
                 case Key.D: if (_currentTrack is { } track) ToggleFavorite(track); break;
                 case Key.Right: Next_Click(sender, e); break; case Key.Left: Previous_Click(sender, e); break;
@@ -236,7 +227,7 @@ public partial class MainWindow : Window
         PageTitle.LineHeight = 42;
         PageSubtitle.FontSize = 13;
         SidebarContents.Margin = new Thickness(14, 38, 14, 16);
-        foreach (var nav in new[] { LibraryNav, AlbumsNav, ArtistsNav, PlaylistsNav, FavoritesNav, HistoryNav })
+        foreach (var nav in new[] { LibraryNav, AlbumsNav, ArtistsNav, FavoritesNav, HistoryNav })
         { nav.Height = 44; nav.FontSize = 14; }
         MusicDropOverlay.Margin = new Thickness(SidebarColumn.Width.Value + 20, 52, 24, 24);
         RefreshInterfaceState();
@@ -276,6 +267,4 @@ public partial class MainWindow : Window
         UiMotion.AnimateDouble(QueuePanel, OpacityProperty, 1, 0);
     }
     private sealed record ArtistSummary(string Name, int Count) { public string CountText => $"{Count:N0} {(Count == 1 ? "track" : "tracks")}"; }
-    private sealed record PlaylistSummary(CustomPlaylist Playlist, List<Track> Tracks)
-    { public string Name => Playlist.Name; public string TrackCountText => $"{Tracks.Count:N0} tracks" + (Playlist.SmartRule is null ? "" : " · Smart"); }
 }

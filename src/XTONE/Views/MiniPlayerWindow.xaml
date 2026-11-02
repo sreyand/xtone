@@ -4,7 +4,7 @@
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:controls="clr-namespace:XTONE.Controls"
         xmlns:views="clr-namespace:XTONE.Views"
-        Title="XTONE Mini" Width="440" Height="180" MinWidth="360" MinHeight="160"
+        Icon="/XTONE;component/Assets/xtone.ico" Title="XTONE Mini" Width="440" Height="180" MinWidth="360" MinHeight="160"
         WindowStyle="None" ResizeMode="CanResize" WindowStartupLocation="CenterScreen"
         Background="{DynamicResource PaperBrush}" Foreground="{DynamicResource InkBrush}"
         FontFamily="{StaticResource AppFont}" FontSize="13" Topmost="{Binding MiniAlwaysOnTop}"
@@ -77,11 +77,6 @@
                     <Setter Property="Background" Value="{DynamicResource SelectionBrush}" />
                     <Setter Property="Foreground" Value="{DynamicResource SelectedTextBrush}" />
                 </Trigger>
-                <Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="BorderBrush" Value="{DynamicResource FocusBrush}" /></Trigger>
-                <MultiTrigger>
-                    <MultiTrigger.Conditions><Condition Property="IsChecked" Value="True" /><Condition Property="IsKeyboardFocused" Value="True" /></MultiTrigger.Conditions>
-                    <Setter Property="BorderBrush" Value="{DynamicResource SelectedTextBrush}" />
-                </MultiTrigger>
             </Style.Triggers>
         </Style>
         <Style x:Key="MiniSeekSlider" TargetType="Slider" BasedOn="{StaticResource SeekSlider}">

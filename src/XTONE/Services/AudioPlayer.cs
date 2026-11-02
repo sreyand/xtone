@@ -46,6 +46,10 @@ public sealed class AudioPlayer : IDisposable
     private readonly object _controlLock = new();
     private readonly SynchronizationContext? _eventContext = SynchronizationContext.Current;
     private readonly Timer _clockTimer;
+    // Only one asynchronous native open/preparation may own decoder resources.
+    // Awaiting this gate does not consume a worker thread. Synchronous controls
+    // remain serialized by _controlLock and never wait on this gate.
+    private readonly SemaphoreSlim _decoderGate = new(1, 1);
     private PlaybackSession? _session;
     private string? _deviceId;
     private string? _lastError;
@@ -149,7 +153,7 @@ public sealed class AudioPlayer : IDisposable
     /// Opens the native decoder and device off the UI thread. Returns false if a
     /// newer open, seek, or stop superseded this request before it was ready.
     /// </summary>
-    public Task<bool> PlayAsync(string path, bool startPlaying = true, TimeSpan? position = null)
+    public async Task<bool> PlayAsync(string path, bool startPlaying = true, TimeSpan? position = null)
     {
         long request;
         lock (_stateLock)
@@ -157,41 +161,50 @@ public sealed class AudioPlayer : IDisposable
             ThrowIfDisposed();
             request = ++_openVersion;
         }
-        return Task.Run(() =>
+        await _decoderGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            PlaybackSession? prepared = null;
-            try
+            lock (_stateLock)
+                if (_disposed || request != _openVersion) return false;
+            return await Task.Run(() =>
             {
-                prepared = CreateSession(path, position ?? TimeSpan.Zero);
-                lock (_controlLock)
+                PlaybackSession? prepared = null;
+                try
                 {
-                    if (!InstallSession(prepared, startPlaying, request))
-                        return false;
-                    prepared = null;
-                    return true;
-                }
-            }
-            catch (Exception error)
-            {
-                lock (_stateLock)
-                {
-                    if (_session == prepared)
+                    lock (_stateLock)
+                        if (_disposed || request != _openVersion) return false;
+                    prepared = CreateSession(path, position ?? TimeSpan.Zero);
+                    lock (_controlLock)
                     {
-                        _session = null;
-                        _playbackVersion++;
+                        if (!InstallSession(prepared, startPlaying, request))
+                            return false;
+                        prepared = null;
+                        return true;
                     }
-                    if (_disposed || request != _openVersion)
-                        return false;
-                    var playbackError = WrapOutputError(error);
-                    _lastError = playbackError.Message;
-                    throw playbackError;
                 }
-            }
-            finally
-            {
-                prepared?.Dispose();
-            }
-        });
+                catch (Exception error)
+                {
+                    lock (_stateLock)
+                    {
+                        if (_session == prepared)
+                        {
+                            _session = null;
+                            _playbackVersion++;
+                        }
+                        if (_disposed || request != _openVersion)
+                            return false;
+                        var playbackError = WrapOutputError(error);
+                        _lastError = playbackError.Message;
+                        throw playbackError;
+                    }
+                }
+                finally
+                {
+                    prepared?.Dispose();
+                }
+            }).ConfigureAwait(false);
+        }
+        finally { _decoderGate.Release(); }
     }
 
     public void Pause()
@@ -304,56 +317,61 @@ public sealed class AudioPlayer : IDisposable
     }
 
     /// <summary>
-    /// Pre-opens and pre-reads the next decoder on a worker thread. Repeated calls
-    /// replace the pending track; null clears it. Stale preparations dispose themselves.
+    /// Pre-opens and pre-reads the next decoder on a worker thread. Identical
+    /// pending requests coalesce; a changed track replaces it and null clears it.
+    /// Stale preparations dispose themselves without starting another native open.
     /// </summary>
     public void PrepareNext(string? path)
     {
-        PlaybackSession? session;
+        PlaybackSession session;
         long sequence;
         long request;
         lock (_stateLock)
         {
-            if (_disposed || _session is null)
-                return;
+            if (_disposed || _session is null) return;
             session = _session;
-            request = ++_prepareVersion;
             sequence = session.Pipeline.Sequence;
-            session.NextRequestedPath = string.IsNullOrWhiteSpace(path) ? null : path;
+            var requestedPath = string.IsNullOrWhiteSpace(path) ? null : path;
+            if (session.PreparationSequence == sequence && session.PreparationError is null
+                && string.Equals(session.NextRequestedPath, requestedPath, StringComparison.OrdinalIgnoreCase)) return;
+            request = ++_prepareVersion;
+            session.PreparationSequence = sequence;
+            session.NextRequestedPath = requestedPath;
+            session.PreparationError = null;
             session.Pipeline.SetNext(sequence, null);
+            path = requestedPath;
         }
-        if (string.IsNullOrWhiteSpace(path))
-            return;
+        if (path is not null) _ = PrepareNextAsync(session, path, sequence, request);
+    }
 
-        _ = Task.Run(() =>
+    private async Task PrepareNextAsync(PlaybackSession session, string path, long sequence, long request)
+    {
+        await _decoderGate.WaitAsync().ConfigureAwait(false);
+        AudioSegment? prepared = null;
+        try
         {
-            AudioSegment? prepared = null;
-            try
+            lock (_stateLock)
+                if (_disposed || _session != session || request != _prepareVersion || session.Pipeline.Sequence != sequence) return;
+            prepared = await Task.Run(() => AudioDecoder.Open(path, session.SampleRate, TimeSpan.Zero, true)).ConfigureAwait(false);
+            lock (_stateLock)
             {
-                prepared = AudioDecoder.Open(path, session.SampleRate, TimeSpan.Zero, true);
-                lock (_stateLock)
-                {
-                    if (_disposed || _session != session || request != _prepareVersion)
-                        return;
-                    session.Pipeline.SetNext(sequence, prepared);
-                    prepared = null; // SetNext consumed ownership, including rejection.
-                }
+                if (_disposed || _session != session || request != _prepareVersion) return;
+                session.Pipeline.SetNext(sequence, prepared);
+                prepared = null; // SetNext consumed ownership, including rejection.
             }
-            catch (Exception error)
-            {
-                // Keep the current track playing. A failed next-track preparation
-                // is surfaced if/when the queue tries to play that file normally.
-                lock (_stateLock)
-                {
-                    if (_session == session && request == _prepareVersion)
-                        session.PreparationError = error.Message;
-                }
-            }
-            finally
-            {
-                prepared?.Dispose();
-            }
-        });
+        }
+        catch (Exception error)
+        {
+            // Current playback continues; a normal queue open reports an unreadable
+            // next file. A later preparation request may retry the same source.
+            lock (_stateLock)
+                if (_session == session && request == _prepareVersion) session.PreparationError = error.Message;
+        }
+        finally
+        {
+            try { prepared?.Dispose(); }
+            finally { _decoderGate.Release(); }
+        }
     }
 
     public void Stop()
@@ -371,6 +389,20 @@ public sealed class AudioPlayer : IDisposable
             }
             old?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Stops immediately, then waits for asynchronous decoder work already in flight
+    /// to release its stale native resources. Callers performing file mutations must
+    /// prevent new playback requests until their operation has completed.
+    /// Cancellation stops waiting; playback remains stopped and stale opens still
+    /// dispose themselves when the native decoder returns.
+    /// </summary>
+    public async Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        Stop();
+        await _decoderGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        _decoderGate.Release();
     }
 
     public void Dispose()
@@ -611,6 +643,7 @@ public sealed class AudioPlayer : IDisposable
         public Queue<AudioBoundary> PendingBoundaries { get; } = new();
         public string? NextRequestedPath { get; set; }
         public string? PreparationError { get; set; }
+        public long PreparationSequence { get; set; } = -1;
         public Exception? Error { get; set; }
         public volatile bool Ended;
         public volatile bool Suppressed;

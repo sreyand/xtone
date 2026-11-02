@@ -49,6 +49,7 @@ internal sealed class AccurateMediaFoundationReader : MediaFoundationReader
         ArgumentNullException.ThrowIfNull(buffer);
         if (offset < 0 || count < 0 || offset > buffer.Length - count)
             throw new ArgumentOutOfRangeException(nameof(count));
+        if (count == 0) return 0;
         _sourceReader ??= CreateReader(ReaderSettings);
         if (_seekPosition is { } requested)
         {

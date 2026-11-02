@@ -1,5 +1,6 @@
 using System.Windows.Input;
 using XTONE.Dialogs;
+using XTONE.Services;
 
 namespace XTONE;
 
@@ -16,8 +17,7 @@ public partial class MainWindow
     {
         if (PlayerDock is null || _closed) return;
         var music = _tracks.Count > 0 || _isDesignPreview;
-        var collections = music || _customAlbums.Count > 0 || _playlists.Count > 0;
-        var welcome = !collections && _activeAlbum is null;
+        var welcome = _musicRoot is null && !_isDesignPreview;
         var ready = (_libraryReady || _isDesignPreview) && !_libraryLoadFailed;
         var scanning = _scanCancellation is not null && _showScanProgress;
         var selected = _currentTrack is not null || _isDesignPreview;
@@ -26,44 +26,51 @@ public partial class MainWindow
         PageHeader.Visibility = welcome ? Visibility.Collapsed : Visibility.Visible;
         MainHeaderRow.Height = new GridLength(welcome ? 0 : 64);
         PageSubtitle.Visibility = Visibility.Collapsed;
-        AlbumsNav.Visibility = music || _customAlbums.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        PlaylistsNav.Visibility = collections ? Visibility.Visible : Visibility.Collapsed;
-        DiscoveryNavigation.Visibility = music ? Visibility.Visible : Visibility.Collapsed;
+        MusicViewToggle.Visibility = !welcome && _section == "Albums" && _activeAlbum is null ? Visibility.Visible : Visibility.Collapsed;
+        AlbumItems.Visibility = _musicView == "List" ? Visibility.Collapsed : Visibility.Visible;
+        MusicList.Visibility = _musicView == "List" ? Visibility.Visible : Visibility.Collapsed;
+        MusicGridButton.SetResourceReference(Button.BackgroundProperty, _musicView == "Grid" ? "SelectionBrush" : "PaperBrush");
+        MusicListButton.SetResourceReference(Button.BackgroundProperty, _musicView == "List" ? "SelectionBrush" : "PaperBrush");
+        AlbumsNav.Visibility = !welcome ? Visibility.Visible : Visibility.Collapsed;
+        DiscoveryNavigation.Visibility = !welcome ? Visibility.Visible : Visibility.Collapsed;
         ArtistsNav.Visibility = _artistCards.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        FavoritesNav.Visibility = _tracks.Any(track => track.IsFavorite) || _section == "Favorites" ? Visibility.Visible : Visibility.Collapsed;
-        HistoryNav.Visibility = _history.Count > 0 || _section == "History" ? Visibility.Visible : Visibility.Collapsed;
+        FavoritesNav.Visibility = _hasFavorites || _section == "Favorites" ? Visibility.Visible : Visibility.Collapsed;
+        HistoryNav.Visibility = _hasHistory || _section == "History" ? Visibility.Visible : Visibility.Collapsed;
         var searching = music && (SearchBox.Visibility == Visibility.Visible || ViewFilter.SelectedIndex > 0);
         SearchControlsPanel.Visibility = searching ? Visibility.Visible : Visibility.Collapsed;
         LibraryToolbar.Visibility = searching || (_statusNeedsAttention || scanning) && !welcome ? Visibility.Visible : Visibility.Collapsed;
         SearchToolbarButton.Visibility = music ? Visibility.Visible : Visibility.Collapsed;
         QueueToolbarButton.Visibility = Visibility.Collapsed;
         HeaderQueueMenu.Visibility = _queue.Entries.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        HeaderMoreButton.Visibility = music ? Visibility.Visible : Visibility.Collapsed;
+        HeaderMoreButton.Visibility = !welcome ? Visibility.Visible : Visibility.Collapsed;
         ImportStatusPanel.Visibility = scanning || _statusNeedsAttention ? Visibility.Visible : Visibility.Collapsed;
         ViewFilter.Visibility = SortPicker.Visibility = searching && _activeAlbum is null && _section is "Library" or "Favorites" or "History" ? Visibility.Visible : Visibility.Collapsed;
-        CreateButton.Visibility = music && _activeAlbum is null && _section == "Playlists" && _playlistCards.Count == 0 && SearchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
-        HeaderAddMusicButton.IsEnabled = ready && !scanning;
+
+        HeaderAddMusicButton.Visibility = !welcome && _section == "Albums" && _activeAlbum is null ? Visibility.Visible : Visibility.Collapsed;
+        HeaderAddMusicButton.IsEnabled = ready && !scanning && !_fileOperationInProgress;
         RetryLoadButton.Visibility = _libraryLoadFailed ? Visibility.Visible : Visibility.Collapsed;
         WelcomeRetryButton.Visibility = welcome && _libraryLoadFailed ? Visibility.Visible : Visibility.Collapsed;
         DetailEmptyState.Visibility = _activeAlbum is { Tracks.Count: 0 } ? Visibility.Visible : Visibility.Collapsed;
-        EmptyAddMusicButton.Visibility = welcome && ready && !scanning ? Visibility.Visible : Visibility.Collapsed;
-        DropMusicHint.Visibility = welcome && ready && !scanning ? Visibility.Visible : Visibility.Collapsed;
+        var emptyFolderPage = EmptyState.Visibility == Visibility.Visible && _activeAlbum is null && SearchBox.Text.Length == 0 && ViewFilter.SelectedIndex == 0 && (_tracks.Count == 0 || _section == "Albums" && _musicItems.Count == 0);
+        EmptyAddMusicButton.Visibility = ready && !scanning && (welcome || emptyFolderPage && !_rootUnavailable) ? Visibility.Visible : Visibility.Collapsed;
+        EmptyAddMusicButton.Content = welcome ? "Choose music folder" : _section == "Albums" ? "Create folder" : "Open music folder";
+        DropMusicHint.Visibility = Visibility.Collapsed;
         WelcomeProgress.Visibility = welcome && ((!ready && !_libraryLoadFailed) || scanning) ? Visibility.Visible : Visibility.Collapsed;
         WelcomeCancelButton.Visibility = welcome && scanning ? Visibility.Visible : Visibility.Collapsed;
         ClearResultsButton.Visibility = !welcome && EmptyState.Visibility == Visibility.Visible &&
             (SearchBox.Text.Length > 0 || ViewFilter.SelectedIndex > 0) ? Visibility.Visible : Visibility.Collapsed;
-        PlaylistEmptyState.Visibility = Visibility.Collapsed;
+
         EmptyHeadline.FontSize = welcome ? 26 : 14;
         EmptyHeadline.FontWeight = welcome ? FontWeights.SemiBold : FontWeights.Normal;
         EmptyHeadline.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, welcome ? "InkBrush" : "MutedBrush");
-        EmptyDescription.Visibility = welcome ? Visibility.Visible : Visibility.Collapsed;
+        EmptyDescription.Visibility = welcome || emptyFolderPage ? Visibility.Visible : Visibility.Collapsed;
         if (welcome)
         {
             EmptyState.Visibility = Visibility.Visible;
-            AlbumScroll.Visibility = LibraryPanel.Visibility = ArtistsPanel.Visibility = PlaylistsPanel.Visibility = Visibility.Collapsed;
-            EmptyHeadline.Text = _libraryLoadFailed ? "Couldn’t open your library" : !ready ? "Opening your library" : scanning ? "Adding your music" : "Your music, here.";
+            AlbumScroll.Visibility = LibraryPanel.Visibility = ArtistsPanel.Visibility = Visibility.Collapsed;
+            EmptyHeadline.Text = _libraryLoadFailed ? "Couldn’t open your library" : !ready ? "Opening your library" : scanning ? "Reading your music" : "Choose your Music folder";
             EmptyDescription.Text = _libraryLoadFailed ? $"{_libraryLoadError} Try again to reopen it." : !ready ? "Just a moment…" : scanning ? ScanStatus.Text :
-                _emptyImportNotice ?? "Add files or a folder to start listening. Your music stays where it is.";
+                _emptyImportNotice ?? "Browse your tracks and folders. Your files stay where they are.";
             LibraryNav.Background = (System.Windows.Media.Brush)FindResource("SelectionBrush");
             LibraryNav.Foreground = (System.Windows.Media.Brush)FindResource(XTONE.Services.ThemeAccessibility.HighContrast ? "SelectedTextBrush" : "BlueBrush");
         }
@@ -73,16 +80,24 @@ public partial class MainWindow
             AlbumScroll.Visibility = _section == "Albums" ? Visibility.Visible : Visibility.Collapsed;
             LibraryPanel.Visibility = _section is "Library" or "Favorites" or "History" ? Visibility.Visible : Visibility.Collapsed;
             ArtistsPanel.Visibility = _section == "Artists" ? Visibility.Visible : Visibility.Collapsed;
-            PlaylistsPanel.Visibility = _section == "Playlists" ? Visibility.Visible : Visibility.Collapsed;
+
         }
     }
 
-    private void AddMusic_Click(object sender, RoutedEventArgs e)
+    private bool _chooseFolderOnSettingsOpen;
+    private void AddMusic_Click(object sender, RoutedEventArgs e) => ChooseMusicFolder_Click(sender, e);
+    private void ChooseMusicFolder_Click(object sender, RoutedEventArgs e)
     {
         if (_isDesignPreview || _closed || _closingRequested || !_libraryReady || _libraryLoadFailed || _scanCancellation is not null && _showScanProgress) return;
-        var choice = new AddMusicWindow { Owner = this };
-        if (ShowAnimatedDialog(choice) != true) return;
-        if (choice.ChooseFolder) ImportFolder_Click(sender, e); else ImportFiles_Click(sender, e);
+        if (sender == EmptyAddMusicButton && _musicRoot is not null) { if (_section == "Albums") CreateMusicFolder_Click(sender, e); else OpenMusicFolder_Click(sender, e); return; }
+        _chooseFolderOnSettingsOpen = true;
+        Settings_Click(sender, e);
+    }
+    private void OpenMusicFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if (_musicRoot is null) { ChooseMusicFolder_Click(sender, e); return; }
+        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(_musicRoot) { UseShellExecute = true }); }
+        catch (Exception error) { SetStatus($"Couldn’t open the Music folder: {error.Message}"); }
     }
 
     private async void RetryLibrary_Click(object sender, RoutedEventArgs e)
@@ -141,28 +156,26 @@ public partial class MainWindow
 
     private void Music_DragOver(object sender, DragEventArgs e)
     {
+        if (FindFolderDropTarget(e.OriginalSource as DependencyObject) is not null) return;
         if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
         var allowed = _libraryReady && !_closed && !_closingRequested && !_isDesignPreview && !_libraryLoadFailed && (_scanCancellation is null || !_showScanProgress);
-        e.Effects = allowed ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Effects = allowed ? DragDropEffects.Link : DragDropEffects.None;
         MusicDropOverlay.Visibility = allowed ? Visibility.Visible : Visibility.Collapsed;
         e.Handled = true;
     }
     private void Music_DragLeave(object sender, DragEventArgs e) => MusicDropOverlay.Visibility = Visibility.Collapsed;
     private async void Music_Drop(object sender, DragEventArgs e)
     {
+        if (FindFolderDropTarget(e.OriginalSource as DependencyObject) is not null) return;
         if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
         e.Handled = true; MusicDropOverlay.Visibility = Visibility.Collapsed;
         if (!_libraryReady || _closed || _closingRequested || _isDesignPreview || _libraryLoadFailed || _scanCancellation is not null && _showScanProgress) return;
+        // Dropping never copies files or silently adds another root.
+        // Inside-root changes are discovered by rescan; outside files are managed in Explorer.
         var inputs = e.Data.GetData(DataFormats.FileDrop) as string[] ?? [];
-        // Accept folders or supported audio only; never turn an unsupported file into a watched folder.
-        var supported = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".flac", ".wav", ".mp3", ".m4a", ".mp4" };
-        var accepted = inputs.Where(path => Directory.Exists(path) || File.Exists(path) && supported.Contains(Path.GetExtension(path)))
-            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        if (accepted.Length == 0)
-        {
-            _emptyImportNotice = "Choose FLAC, WAV, ALAC (M4A), or MP3 files, or a folder containing music.";
-            SetStatus(_emptyImportNotice); RefreshInterfaceState(); return;
-        }
-        await ScanAsync(accepted);
+        if (_musicRoot is not null && inputs.All(path => SamePath(path, _musicRoot) || FolderLibrary.IsWithinRoot(path, _musicRoot)))
+            await ScanAsync(null);
+        else
+            ShowNotice(_musicRoot is null ? "Choose your Music folder in Settings." : "Place music inside your Music folder, then rescan.");
     }
 }

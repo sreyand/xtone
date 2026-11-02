@@ -9,5 +9,6 @@
   <ItemGroup>
     <Compile Include="../../src/XTONE/Models/LibraryModels.cs" Link="LibraryModels.cs" />
     <Compile Include="../../src/XTONE/Services/PlaybackQueue.cs" Link="PlaybackQueue.cs" />
+    <Compile Include="..\..\src\XTONE\Services\ResettableObservableCollection.cs" Link="ResettableObservableCollection.cs" />
   </ItemGroup>
 </Project>

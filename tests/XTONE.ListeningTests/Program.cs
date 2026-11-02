@@ -13,6 +13,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Shell;
 using System.Windows.Threading;
 using XTONE;
+using XTONE.Dialogs;
 using XTONE.Models;
 using XTONE.Services;
 using XTONE.Views;
@@ -43,8 +44,9 @@ internal static class Program
             renderRoot = string.IsNullOrWhiteSpace(renderRoot) ? Path.Combine(AppContext.BaseDirectory, "renders") : Path.GetFullPath(renderRoot);
             Directory.CreateDirectory(renderRoot);
             var music = Path.Combine(fixture, "music");
-            Directory.CreateDirectory(music);
-            var audio = CreateWav(Path.Combine(music, "glasshouse.wav"));
+            var album = Path.Combine(music, "Folder album");
+            Directory.CreateDirectory(album);
+            var audio = CreateWav(Path.Combine(album, "glasshouse.wav"));
             using (var tagged = TagLib.File.Create(audio))
             {
                 tagged.Tag.Title = "Harness Glasshouse";
@@ -57,8 +59,9 @@ internal static class Program
                 if (File.Exists(logo)) tagged.Tag.Pictures = [new TagLib.Picture(logo)];
                 tagged.Save();
             }
+            CreateWav(Path.Combine(music, "Loose track.wav"));
             var seeded = new LibraryStore(dataRoot);
-            seeded.ImportAsync([music]).GetAwaiter().GetResult();
+            seeded.ConfigureMusicFolderAsync(music).GetAwaiter().GetResult();
             seeded.SaveSession(new PlaybackSession
             {
                 QueuePaths = [audio], CurrentIndex = 0, PositionSeconds = .75,
@@ -148,6 +151,78 @@ internal static class Program
         return _exitCode;
     }
 
+    private static async Task CheckPlaybackReliabilityAsync(string dataRoot, string audio, AudioPlayer player, PlaybackQueue queue)
+    {
+        var actual = Get<List<XTONE.Models.Track>>(_main!, "_tracks").Single(track => track.Path == audio);
+        True((bool)Invoke(_main!, "TrySeek", TimeSpan.FromSeconds(1.4))!);
+        Invoke(_main!, "StopCurrentPlayback"); Invoke(_main!, "UpdateNowPlaying");
+        Invoke(_main!, "SavePlaybackSession", false); await Get<Task>(_main!, "_sessionSaveTask");
+        Check("releasing a decoder retains the paused session position instead of saving zero", () =>
+        {
+            True(player.CurrentPath is null); Near(1.4, new LibraryStore(dataRoot).GetSession().PositionSeconds, .2);
+            Near(1.4, Get<NowPlayingState>(_main!, "_listeningState").PositionSeconds, .2);
+        });
+        Invoke(_main!, "PlayPause_Click", _main, new RoutedEventArgs());
+        await UntilAsync(() => !Get<bool>(_main!, "_isOpeningTrack") && player.CurrentPath == audio, "released playback to reopen");
+        Check("play resumes a released decoder near the retained position", () => { True(player.IsPlaying); Near(1.4, player.Position.TotalSeconds, .5); });
+        var priorPump = Get<SessionWritePump?>(_main!, "_sessionWritePump");
+        using (var releaseSave = new ManualResetEventSlim())
+        {
+            var blockedPump = new SessionWritePump(_ => releaseSave.Wait(), _ => { });
+            typeof(MainWindow).GetField("_sessionWritePump", PrivateInstance)!.SetValue(_main, blockedPump);
+            var snapshot = new LibraryStore(dataRoot).Load();
+            var versionBeforeOperation = player.PlaybackVersion;
+            var operation = (Task<bool>)Invoke(_main!, "RunMusicOperationCoreAsync",
+                new Func<IProgress<LibraryProgress>, CancellationToken, Task<LibrarySnapshot>>((_, _) => Task.FromResult(snapshot)),
+                "Checking decoder release…", true)!;
+            try
+            {
+                Check("file operations invalidate playback before awaiting a blocked session save", () =>
+                {
+                    True(!operation.IsCompleted); True(player.CurrentPath is null); True(!player.IsPlaying);
+                    True(player.PlaybackVersion != versionBeforeOperation); True(Get<bool>(_main!, "_fileOperationInProgress"));
+                });
+            }
+            finally { releaseSave.Set(); }
+            True(await operation);
+            await Get<Task>(_main!, "_sessionSaveTask");
+            typeof(MainWindow).GetField("_sessionWritePump", PrivateInstance)!.SetValue(_main, priorPump);
+        }
+        Invoke(_main!, "PauseCurrentPlayback");
+        True((bool)Invoke(_main!, "TrySeek", actual.Duration)!);
+        await (Task)Invoke(_main!, "AdvanceQueueAsync", false)!;
+        Invoke(_main!, "PlayPause_Click", _main, new RoutedEventArgs());
+        await UntilAsync(() => !Get<bool>(_main!, "_isOpeningTrack") && player.CurrentPath == audio, "end-of-queue restart");
+        Check("play at the end of a finished queue restarts the track rather than reopening at EOF", () => { True(player.IsPlaying); True(player.Position.TotalSeconds < .75); });
+        Invoke(_main!, "PauseCurrentPlayback");
+        var missing = new XTONE.Models.Track { Path = Path.Combine(Path.GetDirectoryName(audio)!, "not-present.wav"), Title = "Unavailable fixture", IsMissing = true, Duration = TimeSpan.FromSeconds(8) };
+        Invoke(_main!, "StopCurrentPlayback"); queue.Replace([missing, actual]); queue.RepeatMode = QueueRepeatMode.One;
+        await (Task)Invoke(_main!, "AdvanceQueueAsync", false)!;
+        Check("repeat one skips an unavailable queued entry and reaches the next playable track", () => { Equal(audio, player.CurrentPath); Equal(actual.Id, queue.Current!.Track.Id); True(player.IsPlaying); });
+        Invoke(_main!, "PauseCurrentPlayback"); Invoke(_main!, "StopCurrentPlayback");
+        queue.Replace([missing, missing with { Path = missing.Path + ".other" }]); queue.RepeatMode = QueueRepeatMode.All;
+        var stopwatch = Stopwatch.StartNew(); await (Task)Invoke(_main!, "AdvanceQueueAsync", false)!;
+        Check("an entirely unavailable repeating queue terminates without leaving an open request", () =>
+        {
+            True(stopwatch.Elapsed < TimeSpan.FromSeconds(3)); True(!Get<bool>(_main!, "_isOpeningTrack")); True(player.CurrentPath is null);
+            True(((TextBlock)_main!.FindName("ScanStatus")).Text.Contains("No available tracks"));
+        });
+        queue.Replace(Enumerable.Range(0, 25000).Select(index => missing with { Path = missing.Path + index }));
+        queue.RepeatMode = QueueRepeatMode.All;
+        var interrupted = false;
+        var skipping = (Task)Invoke(_main!, "AdvanceQueueAsync", false)!;
+        _ = _main!.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+        { interrupted = true; Invoke(_main!, "PauseCurrentPlayback"); }));
+        await skipping;
+        Check("a 25000-entry unavailable queue yields to Pause and cancels stale traversal", () =>
+        {
+            True(interrupted); True(!Get<bool>(_main!, "_isOpeningTrack"));
+            True(queue.CurrentIndex < 100); True(player.CurrentPath is null);
+        });
+        queue.RepeatMode = QueueRepeatMode.Off; queue.Replace([actual]);
+        await (Task)Invoke(_main!, "OpenCurrentTrackAsync", false, TimeSpan.FromSeconds(.75), false)!;
+    }
+
     private static async Task RunChecksAsync(string dataRoot, string audio, string renderRoot)
     {
         _main = new MainWindow { ShowActivated = false, ShowInTaskbar = false, Opacity = 0, WindowStartupLocation = WindowStartupLocation.Manual, Left = -30000, Top = -30000 };
@@ -161,6 +236,7 @@ internal static class Program
         var originalPosition = player.Position;
         Check("loads the actual app with isolated metadata and a muted paused session", () =>
         {
+            True(_main.Icon is not null && _main.Icon.Width > 0 && _main.Icon.Height > 0);
             Equal(audio, player.CurrentPath);
             Equal(false, player.IsPlaying);
             Equal(0d, state.Volume);
@@ -170,7 +246,217 @@ internal static class Program
             True(state.Quality.Contains("WAV") && state.Quality.Contains("Lossless"));
             True(Math.Abs(originalPosition.TotalSeconds - .75) < .15);
         });
+        await CheckButtonFocusAsync(_main, "main transport and toolbar", Descendants(_main).OfType<Button>()
+            .Where(button => AutomationProperties.GetName(button) is "Next track" or "Previous track" or "Search library")
+            .Concat(new[] { (Button)_main.FindName("ShuffleButton"), (Button)_main.FindName("RepeatButton"), (Button)_main.FindName("PlayPauseButton") }));
+        var folderDialog = new MusicFolderNameWindow(false, "Focus fixture") { Owner = _main, ShowActivated = false, ShowInTaskbar = false, Opacity = 0 };
+        Conceal(folderDialog); folderDialog.Show();
+        await LayoutAsync(folderDialog);
+        await CheckButtonFocusAsync(folderDialog, "folder dialog primary action", Descendants(folderDialog).OfType<Button>().Where(button => Equals(button.Content, "Create folder")));
+        folderDialog.Close();
+        Check("uses the configured folder album rather than the embedded album tag", () =>
+        {
+            Equal(Path.GetDirectoryName(Path.GetDirectoryName(audio)), Get<string?>(_main, "_musicRoot"));
+            var albums = Get<System.Collections.ObjectModel.ObservableCollection<AlbumCard>>(_main, "_albumCards");
+            Equal(1, albums.Count);
+            Equal("Folder album", albums.Single().Title);
+            Equal(Path.GetDirectoryName(audio), albums.Single().FolderPath);
+        });
+        var browserQueue = Get<PlaybackQueue>(_main, "_queue");
+        var initialQueueIdentities = browserQueue.Entries.Select(entry => entry.Id).ToArray();
+        Check("Music presents a real folder and a loose track as different item kinds", () =>
+        {
+            var items = Get<System.Collections.ObjectModel.ObservableCollection<MusicBrowserItem>>(_main, "_musicItems");
+            Equal(2, items.Count);
+            Equal(1, items.Count(item => item.IsFolder && !item.IsTrack));
+            var looseItem = items.Single(item => item.IsTrack);
+            True(looseItem.Folder is null && looseItem.Track!.Path.EndsWith("Loose track.wav", StringComparison.OrdinalIgnoreCase));
+            Equal(1, Get<System.Collections.ObjectModel.ObservableCollection<AlbumCard>>(_main, "_albumCards").Count);
+        });
+        Invoke(_main, "SetMusicView", "List");
+        await LayoutAsync(_main);
+        await Get<Task>(_main, "_sessionSaveTask");
+        Check("Music list shows the same folders and loose tracks without changing playback", () =>
+        {
+            Equal(Visibility.Visible, ((FrameworkElement)_main.FindName("MusicList")).Visibility);
+            Equal(Visibility.Collapsed, ((FrameworkElement)_main.FindName("AlbumItems")).Visibility);
+            var list = (ListBox)_main.FindName("MusicList");
+            Equal(2, list.Items.Count);
+            Equal(1, list.Items.OfType<MusicBrowserItem>().Count(item => item.IsTrack));
+            True(browserQueue.Entries.Select(entry => entry.Id).SequenceEqual(initialQueueIdentities));
+            Equal("List", new LibraryStore(dataRoot).GetSession().MusicView);
+            AssertPlayerUnchanged(player, audio, originalVersion, originalPosition);
+        });
+        await CheckMusicFocusAsync(_main, "MusicList", "Chrome", "list row");
+        Check("Music list keeps folder and track glyphs centered with consistent horizontal insets", () =>
+        {
+            var buttons = Descendants((ListBox)_main.FindName("MusicList")).OfType<Button>().Where(button => button.Tag is MusicBrowserItem).ToArray();
+            Equal(2, buttons.Length);
+            foreach (var button in buttons)
+            {
+                var content = (Grid)button.Content;
+                var glyph = content.Children.OfType<System.Windows.Shapes.Path>().Single();
+                var glyphBounds = glyph.TransformToAncestor(button).TransformBounds(new Rect(glyph.RenderSize));
+                var contentBounds = content.TransformToAncestor(button).TransformBounds(new Rect(content.RenderSize));
+                True(glyphBounds.Left >= 12);
+                Near(contentBounds.Left + 16, glyphBounds.Left + glyphBounds.Width / 2, .75);
+                True(button.Padding.Left >= 12 && button.Padding.Right >= 12);
+                if (button.Tag is MusicBrowserItem { IsTrack: true })
+                {
+                    var duration = content.Children.OfType<TextBlock>().Single();
+                    var durationBounds = duration.TransformToAncestor(button).TransformBounds(new Rect(duration.RenderSize));
+                    True(duration.ActualWidth > 0 && durationBounds.Right <= button.ActualWidth - 12);
+                }
+            }
+        });
+        Invoke(_main, "SetMusicView", "Grid");
+        await LayoutAsync(_main);
+        Check("returning to Music grid keeps the mixed collection and current queue intact", () =>
+        {
+            Equal(Visibility.Collapsed, ((FrameworkElement)_main.FindName("MusicList")).Visibility);
+            Equal(Visibility.Visible, ((FrameworkElement)_main.FindName("AlbumItems")).Visibility);
+            Equal(2, Get<System.Collections.ObjectModel.ObservableCollection<MusicBrowserItem>>(_main, "_musicItems").Count);
+            True(browserQueue.Entries.Select(entry => entry.Id).SequenceEqual(initialQueueIdentities));
+            AssertPlayerUnchanged(player, audio, originalVersion, originalPosition);
+        });
+        await CheckMusicFocusAsync(_main, "AlbumItems", "Card", "grid card");
+
+        var pinFolder = Get<System.Collections.ObjectModel.ObservableCollection<AlbumCard>>(_main, "_albumCards").Single();
+        var pinBrowserItems = Get<System.Collections.ObjectModel.ObservableCollection<MusicBrowserItem>>(_main, "_musicItems");
+        Check("only physical Music folders are accepted as sidebar drag candidates", () =>
+        {
+            var mouse = new System.Windows.Input.MouseButtonEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, System.Windows.Input.MouseButton.Left);
+            Invoke(_main, "MusicFolder_MouseDown", new Button { Tag = pinBrowserItems.Single(item => item.IsFolder) }, mouse);
+            True(ReferenceEquals(pinFolder, Get<AlbumCard?>(_main, "_folderDragCandidate")));
+            Invoke(_main, "MusicFolder_MouseDown", new Button { Tag = pinBrowserItems.Single(item => item.IsTrack) }, mouse);
+            True(Get<AlbumCard?>(_main, "_folderDragCandidate") is null);
+            True(Invoke(_main, "DroppedFolder", new DataObject("XTONE.MusicFolder", pinFolder.FolderPath)) is AlbumCard);
+            True(Invoke(_main, "DroppedFolder", new DataObject("XTONE.MusicFolder", pinBrowserItems.Single(item => item.IsTrack).Track!.Path)) is null);
+            True(Invoke(_main, "DroppedFolder", new DataObject(DataFormats.FileDrop, new[] { pinFolder.FolderPath! })) is null);
+        });
+        await (Task)Invoke(_main, "PinFolderAsync", pinFolder, true)!;
+        await LayoutAsync(_main);
+        Check("pinning a folder creates a named sidebar shortcut with a folder icon and saved path", () =>
+        {
+            Equal(Visibility.Visible, ((FrameworkElement)_main.FindName("PinnedFoldersPanel")).Visibility);
+            var pinnedItems = (ItemsControl)_main.FindName("PinnedFolderItems");
+            Equal(1, pinnedItems.Items.Count);
+            var shortcut = Descendants(pinnedItems).OfType<Button>().Single(button => button.Tag is AlbumCard);
+            Equal(pinFolder.Title, AutomationProperties.GetName(shortcut));
+            True(Descendants(shortcut).OfType<TextBlock>().Any(label => label.Text == pinFolder.Title));
+            True(Descendants(shortcut).OfType<System.Windows.Shapes.Path>().Any(icon => icon.Data is not null && icon.ActualWidth > 0));
+            True(new LibraryStore(dataRoot).Load().PinnedFolderPaths.Contains(pinFolder.FolderPath!, StringComparer.OrdinalIgnoreCase));
+            True(browserQueue.Entries.Select(entry => entry.Id).SequenceEqual(initialQueueIdentities));
+            AssertPlayerUnchanged(player, audio, originalVersion, originalPosition);
+        });
+        var reopenedPins = new LibraryStore(dataRoot).Load() with { Revision = Get<long>(_main, "_lastSnapshotRevision") };
+        Get<List<string>>(_main, "_pinnedFolderPaths").Clear();
+        Get<System.Collections.ObjectModel.ObservableCollection<AlbumCard>>(_main, "_pinnedFolderCards").Clear();
+        await (Task)Invoke(_main, "ApplySnapshotAsync", reopenedPins)!;
+        await LayoutAsync(_main);
+        Check("a reopened saved library rebuilds its folder shortcut", () =>
+        {
+            var pin = Get<System.Collections.ObjectModel.ObservableCollection<AlbumCard>>(_main, "_pinnedFolderCards").Single();
+            Equal(pinFolder.FolderPath, pin.FolderPath);
+            Equal(pinFolder.Title, pin.Title);
+            Equal(Visibility.Visible, ((FrameworkElement)_main.FindName("PinnedFoldersPanel")).Visibility);
+            AssertPlayerUnchanged(player, audio, originalVersion, originalPosition);
+        });
+        await (Task)Invoke(_main, "PinFolderAsync", pinFolder, false)!;
+        Check("unpinning removes the shortcut while retaining the folder and current playback", () =>
+        {
+            Equal(0, Get<System.Collections.ObjectModel.ObservableCollection<AlbumCard>>(_main, "_pinnedFolderCards").Count);
+            Equal(0, new LibraryStore(dataRoot).Load().PinnedFolderPaths.Count);
+            True(Directory.Exists(pinFolder.FolderPath));
+            AssertPlayerUnchanged(player, audio, originalVersion, originalPosition);
+        });
         await RenderAsync(_main, 1060, 700, Path.Combine(renderRoot, "library-1060x700.png"));
+
+        var fixtureStore = Get<LibraryStore>(_main, "_store");
+        var configuredRoot = Get<string>(_main, "_musicRoot");
+        var looseRoot = Path.Combine(Path.GetDirectoryName(dataRoot)!, "loose-music");
+        Directory.CreateDirectory(looseRoot);
+        CreateWav(Path.Combine(looseRoot, "loose.wav"));
+        var looseSnapshot = await fixtureStore.ConfigureMusicFolderAsync(looseRoot);
+        await (Task)Invoke(_main, "ApplySnapshotAsync", looseSnapshot)!;
+        Invoke(_main, "ShowSection", "Albums");
+        await LayoutAsync(_main);
+        Check("a loose-only root is visible in Music without manufacturing a folder or showing an empty page", () =>
+        {
+            Equal(1, Get<List<XTONE.Models.Track>>(_main, "_tracks").Count);
+            Equal(0, Get<System.Collections.ObjectModel.ObservableCollection<AlbumCard>>(_main, "_albumCards").Count);
+            var item = Get<System.Collections.ObjectModel.ObservableCollection<MusicBrowserItem>>(_main, "_musicItems").Single();
+            True(item.IsTrack && item.Folder is null);
+            Equal(Visibility.Collapsed, ((FrameworkElement)_main.FindName("EmptyState")).Visibility);
+            Equal(1, ((ListBox)_main.FindName("MusicList")).Items.Count);
+            AssertPlayerUnchanged(player, audio, originalVersion, originalPosition);
+        });
+        var restoredSnapshot = await fixtureStore.ConfigureMusicFolderAsync(configuredRoot);
+        await (Task)Invoke(_main, "ApplySnapshotAsync", restoredSnapshot)!;
+        Invoke(_main, "ShowSection", "Albums");
+
+        var freshFolder = fixtureStore.CreateMusicFolder("Fresh album");
+        var freshSnapshot = await fixtureStore.RefreshAsync();
+        await (Task)Invoke(_main, "ApplySnapshotAsync", freshSnapshot)!;
+        var freshCard = Get<System.Collections.ObjectModel.ObservableCollection<AlbumCard>>(_main, "_albumCards")
+            .Single(folder => string.Equals(folder.FolderPath, freshFolder, StringComparison.OrdinalIgnoreCase));
+        Invoke(_main, "OpenAlbum", freshCard);
+        await LayoutAsync(_main);
+        Check("a newly created physical folder opens empty and offers Add tracks", () =>
+        {
+            True(Directory.Exists(freshFolder));
+            Equal(0, freshCard.Tracks.Count);
+            Equal(Visibility.Visible, ((FrameworkElement)_main.FindName("DetailEmptyState")).Visibility);
+            Equal(Visibility.Visible, ((FrameworkElement)_main.FindName("AddFolderTracksButton")).Visibility);
+            Equal(Visibility.Visible, ((FrameworkElement)_main.FindName("OpenAlbumFolderButton")).Visibility);
+        });
+        var queue = Get<PlaybackQueue>(_main, "_queue");
+        var queuedIdentities = queue.Entries.Select(entry => entry.Id).ToArray();
+        var movingTrackId = queue.Current!.Track.Id;
+        Func<IProgress<LibraryProgress>, CancellationToken, Task<LibrarySnapshot>> moveToFresh =
+            (progress, token) => fixtureStore.MoveTracksToFolderAsync([audio], freshFolder, progress, token);
+        True(await (Task<bool>)Invoke(_main, "RunMusicOperationAsync", moveToFresh, "Organizing fixture…", true)!);
+        var movedAudio = Path.Combine(freshFolder, Path.GetFileName(audio));
+        Check("organizing the loaded track releases its decoder and restores its paused queue identity", () =>
+        {
+            True(File.Exists(movedAudio) && !File.Exists(audio));
+            Equal(movedAudio, player.CurrentPath);
+            True(!player.IsPlaying && _main.IsEnabled && !Get<bool>(_main, "_fileOperationInProgress"));
+            True(queue.Entries.Select(entry => entry.Id).SequenceEqual(queuedIdentities));
+            Equal(movingTrackId, queue.Current!.Track.Id);
+            Equal(movedAudio, queue.Current.Track.Path);
+            True(Math.Abs(player.Position.TotalSeconds - originalPosition.TotalSeconds) < .15);
+            True(_main.TaskbarItemInfo!.ThumbButtonInfos.All(button => button.IsEnabled));
+        });
+        Func<IProgress<LibraryProgress>, CancellationToken, Task<LibrarySnapshot>> moveBack =
+            (progress, token) => fixtureStore.MoveTracksToFolderAsync([movedAudio], Path.GetDirectoryName(audio)!, progress, token);
+        True(await (Task<bool>)Invoke(_main, "RunMusicOperationAsync", moveBack, "Restoring fixture…", true)!);
+        await CheckFolderOrganizationAsync(fixtureStore, dataRoot, audio, player, queue);
+        await CheckTrackDropOrganizationAsync(fixtureStore, dataRoot, audio, freshFolder, player, queue);
+        originalVersion = player.PlaybackVersion;
+        originalPosition = player.Position;
+        Invoke(_main, "ShowSection", "Albums");
+
+        var playableLooseItem = ((ListBox)_main.FindName("MusicList")).Items.OfType<MusicBrowserItem>().Single(item => item.IsTrack);
+        Invoke(_main, "MusicItem_Click", new Button { Tag = playableLooseItem }, new RoutedEventArgs());
+        await UntilAsync(() => !Get<bool>(_main, "_isOpeningTrack") && player.CurrentPath == playableLooseItem.Track!.Path,
+            "the loose Music item to open through the existing player");
+        Check("a loose Music item plays its real file without opening a synthetic folder", () =>
+        {
+            True(player.IsPlaying && state.Volume == 0);
+            Equal(playableLooseItem.Track!.Path, queue.Current!.Track.Path);
+            Equal(1, queue.Entries.Count);
+            True(Get<AlbumCard?>(_main, "_activeAlbum") is null);
+            True(ReferenceEquals(player, Get<AudioPlayer>(_main, "_player")));
+        });
+        Invoke(_main, "PauseCurrentPlayback");
+        queue.Replace([Get<List<XTONE.Models.Track>>(_main, "_tracks").Single(track => track.Path == audio)]);
+        await (Task)Invoke(_main, "OpenCurrentTrackAsync", false, originalPosition, false)!;
+        originalVersion = player.PlaybackVersion;
+        originalPosition = player.Position;
+
+        await CheckPlaybackReliabilityAsync(dataRoot, audio, player, queue);
+        originalVersion = player.PlaybackVersion; originalPosition = player.Position;
 
         Invoke(_main, "ShowFocusView");
         var focus = Get<FocusWindow>(_main, "_focusWindow");
@@ -178,11 +464,15 @@ internal static class Program
         await LayoutAsync(focus);
         Check("focus shows the shared paused track without replacing the audio engine", () =>
         {
+            True(focus.Icon is not null && focus.Icon.Width > 0 && focus.Icon.Height > 0);
             True(!_main.IsVisible && focus.IsVisible);
             True(ReferenceEquals(state, focus.DataContext));
             Equal("Harness Glasshouse", ((TextBlock)focus.FindName("TrackTitle")).Text);
             AssertPlayerUnchanged(player, audio, originalVersion, originalPosition);
         });
+        await CheckButtonFocusAsync(focus, "Focus transport", Descendants(focus).OfType<Button>()
+            .Where(button => AutomationProperties.GetName(button) is "Next track" or "Previous track")
+            .Append((Button)focus.FindName("PlayPauseButton")));
         await RenderAsync(focus, 1000, 800, Path.Combine(renderRoot, "focus-1000x800.png"));
         await RenderAsync(focus, 640, 600, Path.Combine(renderRoot, "focus-640x600.png"));
         var previousBounds = new Rect(focus.Left, focus.Top, focus.Width, focus.Height);
@@ -215,11 +505,15 @@ internal static class Program
         await LayoutAsync(mini);
         Check("mini hides focus and uses the same metadata and engine", () =>
         {
+            True(mini.Icon is not null && mini.Icon.Width > 0 && mini.Icon.Height > 0);
             True(mini.IsVisible && !focus.IsVisible && !_main.IsVisible);
             True(ReferenceEquals(state, mini.DataContext));
             True(ReferenceEquals(player, Get<AudioPlayer>(_main, "_player")));
             AssertPlayerUnchanged(player, audio, originalVersion, originalPosition);
         });
+        await CheckButtonFocusAsync(mini, "Mini transport", Descendants(mini).OfType<Button>()
+            .Where(button => AutomationProperties.GetName(button) is "Next track" or "Previous track")
+            .Append((Button)mini.FindName("PlayPauseButton")));
         await RenderAsync(mini, 440, 180, Path.Combine(renderRoot, "mini-440x180.png"));
         await RenderAsync(mini, 360, 160, Path.Combine(renderRoot, "mini-360x160.png"));
         var miniSeek = (Slider)mini.FindName("PositionSlider");
@@ -253,6 +547,25 @@ internal static class Program
             True(state.MiniAlwaysOnTop && mini.Topmost);
             True(new LibraryStore(dataRoot).GetSession().MiniAlwaysOnTop);
         });
+        True(pin.Focus());
+        await Dispatcher.Yield(DispatcherPriority.Input);
+        Check("focused Mini pin retains its selected state without a persistent focus border", () =>
+        {
+            True(pin.IsKeyboardFocused && pin.FocusVisualStyle is not null && !pin.IsMouseOver);
+            True(IsClearBrush(pin.BorderBrush));
+            True(ReferenceEquals(mini.FindResource("SelectionBrush"), pin.Background));
+            True(ReferenceEquals(mini.FindResource("SelectedTextBrush"), pin.Foreground));
+        });
+        pin.SetCurrentValue(ToggleButton.IsCheckedProperty, false);
+        await Dispatcher.Yield(DispatcherPriority.DataBind);
+        Check("unchecking the focused Mini pin clears selection without leaving an outline", () =>
+        {
+            True(pin.IsKeyboardFocused && IsClearBrush(pin.BorderBrush) && IsClearBrush(pin.Background));
+            True(!state.MiniAlwaysOnTop && !mini.Topmost);
+        });
+        pin.SetCurrentValue(ToggleButton.IsCheckedProperty, true);
+        System.Windows.Input.Keyboard.ClearFocus();
+        await Get<Task>(_main, "_sessionSaveTask");
 
         Invoke(_main, "ShowFocusView");
         Conceal(focus);
@@ -442,6 +755,172 @@ internal static class Program
         Console.WriteLine($"LAYOUT {Path.GetFileName(path)}: {content.ActualWidth:0.#}×{content.ActualHeight:0.#} DIPs, {bitmap.PixelWidth}×{bitmap.PixelHeight} pixels");
     }
 
+    private static async Task CheckFolderOrganizationAsync(LibraryStore store, string dataRoot, string audio, AudioPlayer player, PlaybackQueue queue)
+    {
+        var root = Get<string>(_main!, "_musicRoot");
+        var originalFolder = Path.GetDirectoryName(audio)!;
+        var card = Get<System.Collections.ObjectModel.ObservableCollection<AlbumCard>>(_main!, "_albumCards")
+            .Single(folder => folder.FolderPath == originalFolder);
+        var sourceImage = Path.Combine(Path.GetDirectoryName(dataRoot)!, "chosen-artwork.png");
+        var image = BitmapSource.Create(2, 2, 96, 96, PixelFormats.Bgra32, null,
+            new byte[] { 40, 60, 220, 255, 40, 60, 220, 255, 40, 60, 220, 255, 40, 60, 220, 255 }, 8);
+        using (var output = File.Create(sourceImage))
+        {
+            var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image)); encoder.Save(output);
+        }
+        var sourceBytes = File.ReadAllBytes(sourceImage);
+        var entryIds = queue.Entries.Select(entry => entry.Id).ToArray();
+        var trackId = queue.Current!.Track.Id;
+        var position = player.Position;
+        await (Task)Invoke(_main!, "PinFolderAsync", card, true)!;
+        Invoke(_main!, "OpenAlbum", card);
+        True(await (Task<bool>)Invoke(_main!, "SetFolderArtworkAsync", card, sourceImage)!);
+        var artSnapshot = new LibraryStore(dataRoot).Load();
+        var cachedArtwork = artSnapshot.FolderArtworkPaths[originalFolder];
+        Check("choosing folder artwork updates the browser and shared listening presentation without rewriting its source", () =>
+        {
+            True(File.Exists(cachedArtwork) && cachedArtwork != sourceImage);
+            True(File.ReadAllBytes(sourceImage).SequenceEqual(sourceBytes));
+            Equal(cachedArtwork, Get<System.Collections.ObjectModel.ObservableCollection<AlbumCard>>(_main!, "_albumCards").Single(folder => folder.FolderPath == originalFolder).ArtworkPath);
+            Equal(cachedArtwork, ((XTONE.Controls.AlbumArtwork)_main!.FindName("NowPlayingArtwork")).SourcePath);
+            Equal(cachedArtwork, Get<NowPlayingState>(_main!, "_listeningState").ArtworkPath);
+            True(queue.Entries.Select(entry => entry.Id).SequenceEqual(entryIds));
+            Equal(audio, player.CurrentPath); True(!player.IsPlaying);
+        });
+        card = Get<System.Collections.ObjectModel.ObservableCollection<AlbumCard>>(_main!, "_albumCards").Single(folder => folder.FolderPath == originalFolder);
+        True(await (Task<bool>)Invoke(_main!, "RenameFolderAsync", card, "Renamed listening folder")!);
+        var renamedFolder = Path.Combine(root, "Renamed listening folder");
+        var renamedAudio = Path.Combine(renamedFolder, Path.GetFileName(audio));
+        Check("renaming the loaded folder preserves active detail, audio position, queue identities, pinned shortcut and artwork", () =>
+        {
+            True(Directory.Exists(renamedFolder) && !Directory.Exists(originalFolder));
+            Equal(renamedAudio, player.CurrentPath);
+            Equal(trackId, queue.Current!.Track.Id);
+            Equal(renamedAudio, queue.Current.Track.Path);
+            True(queue.Entries.Select(entry => entry.Id).SequenceEqual(entryIds));
+            True(!player.IsPlaying && Math.Abs(player.Position.TotalSeconds - position.TotalSeconds) < .15);
+            Equal(renamedFolder, Get<AlbumCard?>(_main!, "_activeAlbum")?.FolderPath);
+            Equal("Renamed listening folder", ((TextBlock)_main!.FindName("PageTitle")).Text);
+            var shortcut = Get<System.Collections.ObjectModel.ObservableCollection<AlbumCard>>(_main!, "_pinnedFolderCards").Single();
+            Equal(renamedFolder, shortcut.FolderPath); Equal("Renamed listening folder", shortcut.Title);
+            var saved = new LibraryStore(dataRoot).Load();
+            True(saved.PinnedFolderPaths.Contains(renamedFolder));
+            Equal(cachedArtwork, saved.FolderArtworkPaths[renamedFolder]);
+            True(!saved.FolderArtworkPaths.ContainsKey(originalFolder));
+            Equal(cachedArtwork, Get<NowPlayingState>(_main!, "_listeningState").ArtworkPath);
+            True(_main!.IsEnabled && _main.TaskbarItemInfo!.ThumbButtonInfos.All(button => button.IsEnabled));
+        });
+        var renamedCard = Get<System.Collections.ObjectModel.ObservableCollection<AlbumCard>>(_main!, "_albumCards").Single(folder => folder.FolderPath == renamedFolder);
+        True(await (Task<bool>)Invoke(_main!, "SetFolderArtworkAsync", renamedCard, null)!);
+        Check("resetting folder artwork removes the override and restores the embedded cover across listening views", () =>
+        {
+            True(!new LibraryStore(dataRoot).Load().FolderArtworkPaths.ContainsKey(renamedFolder));
+            var expected = Get<List<XTONE.Models.Track>>(_main!, "_tracks").Single(track => track.Path == renamedAudio).ArtworkPath;
+            True(expected is not null && expected != cachedArtwork);
+            Equal(expected, Get<NowPlayingState>(_main!, "_listeningState").ArtworkPath);
+            Equal(expected, ((XTONE.Controls.AlbumArtwork)_main!.FindName("NowPlayingArtwork")).SourcePath);
+            True(File.Exists(sourceImage));
+        });
+        renamedCard = Get<System.Collections.ObjectModel.ObservableCollection<AlbumCard>>(_main!, "_albumCards").Single(folder => folder.FolderPath == renamedFolder);
+        True(await (Task<bool>)Invoke(_main!, "RenameFolderAsync", renamedCard, Path.GetFileName(originalFolder))!);
+        card = Get<System.Collections.ObjectModel.ObservableCollection<AlbumCard>>(_main!, "_albumCards").Single(folder => folder.FolderPath == originalFolder);
+        await (Task)Invoke(_main!, "PinFolderAsync", card, false)!;
+        Equal(audio, player.CurrentPath);
+        Invoke(_main!, "ShowSection", "Albums");
+    }
+
+    private static async Task CheckTrackDropOrganizationAsync(LibraryStore store, string dataRoot, string audio, string destination, AudioPlayer player, PlaybackQueue queue)
+    {
+        var root = Get<string>(_main!, "_musicRoot");
+        var loosePath = Path.Combine(root, "Loose track.wav");
+        var loose = Get<List<XTONE.Models.Track>>(_main!, "_tracks").Single(track => track.Path == loosePath);
+        var destinationCard = Get<System.Collections.ObjectModel.ObservableCollection<AlbumCard>>(_main!, "_albumCards").Single(folder => folder.FolderPath == destination);
+        var dragData = (DataObject?)Invoke(_main!, "CreateTrackDragData", (object)new[] { loose });
+        True(dragData is not null);
+        var ids = queue.Entries.Select(entry => entry.Id).ToArray();
+        var position = player.Position;
+        Equal(DragDropEffects.Move, (DragDropEffects)Invoke(_main!, "GetFolderDropEffect", dragData, destinationCard)!);
+        await (Task)Invoke(_main!, "DropTracksIntoFolderAsync", dragData, destinationCard)!;
+        var movedPath = Path.Combine(destination, Path.GetFileName(loosePath));
+        Check("dropping a current-library track into a folder moves the real file and retains playback and track identity", () =>
+        {
+            True(File.Exists(movedPath) && !File.Exists(loosePath));
+            Equal(loose.Id, new LibraryStore(dataRoot).Load().Tracks.Single(track => track.Path == movedPath).Id);
+            Equal(audio, player.CurrentPath); True(!player.IsPlaying);
+            True(Math.Abs(player.Position.TotalSeconds - position.TotalSeconds) < .15);
+            True(queue.Entries.Select(entry => entry.Id).SequenceEqual(ids));
+        });
+        var externalPath = CreateWav(Path.Combine(Path.GetDirectoryName(dataRoot)!, "External drop.wav"));
+        var externalBytes = File.ReadAllBytes(externalPath);
+        var externalData = new DataObject(DataFormats.FileDrop, new[] { externalPath });
+        Equal(DragDropEffects.Copy, (DragDropEffects)Invoke(_main!, "GetFolderDropEffect", externalData, destinationCard)!);
+        await (Task)Invoke(_main!, "DropTracksIntoFolderAsync", externalData, destinationCard)!;
+        Check("dropping external audio copies it into the folder while preserving the original", () =>
+        {
+            True(File.Exists(Path.Combine(destination, Path.GetFileName(externalPath))));
+            True(File.ReadAllBytes(externalPath).SequenceEqual(externalBytes));
+            Equal(audio, player.CurrentPath); True(!player.IsPlaying);
+            True(queue.Entries.Select(entry => entry.Id).SequenceEqual(ids));
+        });
+        var invalidPath = Path.Combine(Path.GetDirectoryName(dataRoot)!, "Unsupported.txt");
+        File.WriteAllText(invalidPath, "An unsupported fixture, not an instruction.");
+        var invalidData = new DataObject(DataFormats.FileDrop, new[] { invalidPath });
+        Equal(DragDropEffects.None, (DragDropEffects)Invoke(_main!, "GetFolderDropEffect", invalidData, destinationCard)!);
+        await (Task)Invoke(_main!, "DropTracksIntoFolderAsync", invalidData, destinationCard)!;
+        Check("folder drops reject unsupported files and sidebar pin payloads without modifying files", () =>
+        {
+            True(!File.Exists(Path.Combine(destination, Path.GetFileName(invalidPath))));
+            Equal(DragDropEffects.None, (DragDropEffects)Invoke(_main!, "GetFolderDropEffect", new DataObject("XTONE.MusicFolder", destination), destinationCard)!);
+            True(File.Exists(invalidPath));
+        });
+        // Restore the loose fixture through the same serialized mutation coordinator.
+        Func<IProgress<LibraryProgress>, CancellationToken, Task<LibrarySnapshot>> restore = (progress, token) => store.MoveTracksToFolderAsync([movedPath], root, progress, token);
+        True(await (Task<bool>)Invoke(_main!, "RunMusicOperationAsync", restore, "Restoring drop fixture…", true)!);
+        Invoke(_main!, "ShowSection", "Albums");
+    }
+
+    private static bool IsClearBrush(Brush? brush) => brush is null || brush is SolidColorBrush solid && solid.Color.A == 0;
+
+    private static async Task CheckButtonFocusAsync(Window owner, string description, IEnumerable<Button> candidates)
+    {
+        var buttons = candidates.Distinct().ToArray();
+        True(buttons.Length > 0);
+        foreach (var button in buttons)
+        {
+            button.ApplyTemplate();
+            True(button.Focus());
+            await Dispatcher.Yield(DispatcherPriority.Input);
+            owner.UpdateLayout();
+            True(button.IsKeyboardFocused && !button.IsMouseOver);
+            True(ReferenceEquals(owner.FindResource("KeyboardFocusStyle"), button.FocusVisualStyle));
+            var chrome = button.Template.FindName("Chrome", button) as Border
+                ?? throw new Exception($"The {description} button has no Chrome border.");
+            if (!IsClearBrush(chrome.BorderBrush) && chrome.BorderThickness != new Thickness(0))
+                throw new Exception($"Focused {description} button {AutomationProperties.GetName(button)} retained a visible border.");
+        }
+        Check($"focused {description} controls keep their chrome clear while retaining keyboard focus visuals", () => True(buttons.All(button => button.Focusable)));
+        System.Windows.Input.Keyboard.ClearFocus();
+    }
+
+    private static async Task CheckMusicFocusAsync(MainWindow owner, string hostName, string borderName, string description)
+    {
+        var host = (FrameworkElement)owner.FindName(hostName);
+        var button = Descendants(host).OfType<Button>().First(control => control.Tag is MusicBrowserItem { IsFolder: true });
+        button.ApplyTemplate();
+        System.Windows.Input.Keyboard.Focus(button);
+        await Dispatcher.Yield(DispatcherPriority.Input);
+        owner.UpdateLayout();
+        Check($"programmatically focused Music {description} keeps its border clear and keyboard focus styling available", () =>
+        {
+            True(button.Focusable && button.IsKeyboardFocused && !button.IsMouseOver);
+            True(ReferenceEquals(owner.FindResource("KeyboardFocusStyle"), button.FocusVisualStyle));
+            var border = button.Template.FindName(borderName, button) as Border
+                ?? throw new Exception($"Music {description} has no {borderName} border.");
+            True(border.BorderBrush is null || border.BorderBrush is SolidColorBrush solid && solid.Color.A == 0);
+        });
+        System.Windows.Input.Keyboard.ClearFocus();
+    }
+
     private static async Task LayoutAsync(Window window)
     {
         window.UpdateLayout();
@@ -514,3 +993,4 @@ internal static class Program
     private static void Equal<T>(T expected, T actual)
     { if (!EqualityComparer<T>.Default.Equals(expected, actual)) throw new Exception($"Expected {expected}; actual {actual}."); }
 }
+

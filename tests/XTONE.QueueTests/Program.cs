@@ -380,5 +380,58 @@ Run("invalid select, remove and move calls leave queue identity intact", () =>
     CheckCurrent(queue, current);
 });
 
+Run("refreshing moved files preserves duplicate entry identities, selection, play-next and listening history", () =>
+{
+    var duplicate = Song("moved-duplicate");
+    var queue = new PlaybackQueue { Shuffle = true, RepeatMode = QueueRepeatMode.All };
+    queue.Replace([duplicate, Song("other"), duplicate, Song("last")]);
+    var firstDuplicate = queue.Entries[0].Id;
+    queue.Select(2);
+    var currentDuplicate = queue.Current!.Id;
+    queue.InsertNext(Song("requested-next"));
+    var requested = queue.Entries[queue.PeekNext()].Id;
+    var identities = queue.Entries.Select(entry => entry.Id).ToArray();
+    var replacement = duplicate with { Path = @"C:\Music\Organized\moved-duplicate.flac", IsFavorite = true };
+    var changedDuplicates = 0;
+    foreach (var entry in queue.Entries.Where(entry => entry.Track.Id == duplicate.Id))
+        entry.PropertyChanged += (_, args) => { if (args.PropertyName == "Track") changedDuplicates++; };
+
+    queue.RefreshTracks(track => track.Id == duplicate.Id ? replacement : track);
+
+    Check(queue.Entries.Select(entry => entry.Id).SequenceEqual(identities), "refresh changed entry identities or order");
+    CheckCurrent(queue, currentDuplicate);
+    Check(queue.CurrentIndex == 2, "refresh changed the selected duplicate");
+    var duplicates = queue.Entries.Where(entry => entry.Track.Id == duplicate.Id).ToArray();
+    Check(duplicates.Length == 2 && duplicates.All(entry => ReferenceEquals(entry.Track, replacement)), "both duplicate entries did not adopt the moved track");
+    Check(changedDuplicates == 2, "bound duplicate rows were not notified of replacement metadata");
+    Check(queue.Entries[queue.PeekNext()].Id == requested, "refresh dropped the explicit play-next request");
+    Check(queue.Shuffle && queue.RepeatMode == QueueRepeatMode.All, "refresh changed queue modes");
+    queue.Select(queue.PeekNext());
+    Check(queue.Previous(), "refresh lost listening history");
+    CheckCurrent(queue, currentDuplicate);
+    Check(queue.Previous(), "refresh lost the earlier duplicate history entry");
+    CheckCurrent(queue, firstDuplicate);
+});
+
+Run("large queue reads allocate no per-lookup copies and collection mutations invalidate indices", () =>
+{
+    var queue = Queue(25000, 12500);
+    var selected = queue.Current!.Id;
+    var bytes = GC.GetAllocatedBytesForCurrentThread();
+    for (var i = 0; i < 20000; i++) { Check(queue.Current!.Id == selected, "current identity changed"); Check(queue.CurrentIndex == 12500, "index changed"); }
+    Check(GC.GetAllocatedBytesForCurrentThread() - bytes < 4096, "queue lookup still allocates per-read copies");
+    queue.Entries.Move(12500, 4); Check(queue.CurrentIndex == 4, "move left stale index");
+    queue.Entries.RemoveAt(0); Check(queue.CurrentIndex == 3, "remove left stale index");
+    queue.ClearUpcoming(); Check(queue.Entries.Count == 1 && queue.Current!.Id == selected && queue.CurrentIndex == 0, "clear lost current identity");
+});
+Run("large queue replacement publishes one collection reset", () =>
+{
+    var queue = new PlaybackQueue(); var changes = 0;
+    queue.Entries.CollectionChanged += (_,_) => changes++;
+    queue.Replace(Enumerable.Range(0, 25000).Select(i => Song("bulk-" + i)), 24999);
+    Check(changes == 1 && queue.CurrentIndex == 24999, "bulk replacement emitted per-track changes");
+    queue.Select(0); CheckCurrent(queue, queue.Entries[0].Id);
+});
+
 Console.WriteLine($"Queue tests: {passed} passed, {failed} failed.");
 return failed == 0 ? 0 : 1;

@@ -67,22 +67,28 @@ internal sealed class GaplessSampleProvider : ISampleProvider, IDisposable
     {
         AudioSegment? release;
         bool accepted;
+        bool incompatible;
         lock (_sync)
         {
             accepted = !_disposed && !_endOfStream && expectedSequence == _sequence;
-            if (accepted && next is not null
-                && (next.Source.WaveFormat.SampleRate != WaveFormat.SampleRate || next.Source.WaveFormat.Channels != WaveFormat.Channels))
-                throw new ArgumentException("Queued audio must use the output sample rate and channel count.", nameof(next));
-            release = accepted ? _next : next;
-            if (accepted)
-                _next = next;
+            incompatible = accepted && next is not null
+                && (next.Source.WaveFormat.SampleRate != WaveFormat.SampleRate || next.Source.WaveFormat.Channels != WaveFormat.Channels);
+            release = accepted && !incompatible ? _next : next;
+            if (accepted && !incompatible) _next = next;
         }
+        // Ownership transfers on every call, including a rejected format. Dispose
+        // outside the audio lock without dropping a previously valid preparation.
         release?.Dispose();
+        if (incompatible) throw new ArgumentException("Queued audio must use the output sample rate and channel count.", nameof(next));
         return accepted;
     }
 
     public int Read(float[] buffer, int offset, int count)
     {
+        ArgumentNullException.ThrowIfNull(buffer);
+        var capacity = Buffer.ByteLength(buffer) / sizeof(float); // also supports NAudio's byte/float alias
+        if (offset < 0 || count < 0 || offset > capacity - count) throw new ArgumentOutOfRangeException(nameof(count));
+        if (count == 0) return 0;
         List<AudioSegment>? release = null;
         List<AudioBoundary>? boundaries = null;
         var total = 0;
@@ -90,7 +96,7 @@ internal sealed class GaplessSampleProvider : ISampleProvider, IDisposable
         {
             lock (_sync)
             {
-                if (_disposed || _current is null)
+                if (_disposed || _current is null || _endOfStream)
                     return 0;
                 while (total < count)
                 {

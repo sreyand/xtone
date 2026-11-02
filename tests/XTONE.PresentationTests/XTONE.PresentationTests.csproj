@@ -12,6 +12,9 @@
     <Compile Include="..\..\src\XTONE\Models\NowPlayingState.cs" Link="NowPlayingState.cs" />
     <Compile Include="..\..\src\XTONE\Models\LibraryModels.cs" Link="LibraryModels.cs" />
     <Compile Include="..\..\src\XTONE\Services\LibraryStore.cs" Link="LibraryStore.cs" />
+    <Compile Include="..\..\src\XTONE\Services\FolderLibrary.cs" Link="FolderLibrary.cs" />
+    <Compile Include="..\..\src\XTONE\Services\MusicFileOrganizer.cs" Link="MusicFileOrganizer.cs" />
     <Compile Include="..\..\src\XTONE\GlobalUsings.cs" Link="GlobalUsings.cs" />
+    <Compile Include="..\..\src\XTONE\Services\SessionWritePump.cs" Link="SessionWritePump.cs" />
   </ItemGroup>
 </Project>

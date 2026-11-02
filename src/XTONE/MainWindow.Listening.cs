@@ -173,7 +173,7 @@ public partial class MainWindow
             _listeningState.Volume = VolumeSlider.Value;
             _listeningState.CanSeek = !_isDesignPreview && !_isOpeningTrack && _player.CurrentPath is not null && DisplayDuration > TimeSpan.Zero;
             _listeningState.DurationSeconds = _isDesignPreview ? PositionSlider.Maximum : DisplayDuration.TotalSeconds;
-            _listeningState.PositionSeconds = _isDesignPreview ? PositionSlider.Value : _player.Position.TotalSeconds;
+            _listeningState.PositionSeconds = _isDesignPreview ? PositionSlider.Value : PlaybackPosition.TotalSeconds;
             _listeningState.Status = _player.LastError ?? track?.Error ?? (track?.IsMissing == true ? "This file is missing. Locate it from the library to reconnect it."
                 : ScanStatus.Text.StartsWith("Couldn't", StringComparison.OrdinalIgnoreCase)
                 || ScanStatus.Text.StartsWith("Can't", StringComparison.OrdinalIgnoreCase) ? ScanStatus.Text : "");

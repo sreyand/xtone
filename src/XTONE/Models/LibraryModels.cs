@@ -5,10 +5,14 @@ namespace XTONE.Models;
 
 public sealed record Track
 {
+    public string Id { get; init; } = Guid.NewGuid().ToString("N");
+    public int MetadataVersion { get; init; }
     public string Path { get; init; } = "";
     public string Title { get; init; } = "Untitled track";
     public string Artist { get; init; } = "Unknown artist";
     public string AlbumArtist { get; init; } = "";
+    public string[] Performers { get; init; } = [];
+    public string[] AlbumPerformers { get; init; } = [];
     public string Album { get; init; } = "Unknown album";
     public uint TrackNumber { get; init; }
     public uint DiscNumber { get; init; }
@@ -27,6 +31,8 @@ public sealed record Track
     public bool IsMissing { get; init; }
     public string? Error { get; init; }
     public bool IsFavorite { get; set; }
+
+    [JsonIgnore] public IReadOnlyList<string> ArtistCredits => XTONE.Models.ArtistCredits.ForTrack(this);
 
     [JsonIgnore] public bool CanPlay => !IsMissing && string.IsNullOrWhiteSpace(Error);
     [JsonIgnore] public string Availability => IsMissing ? "Missing file" : !string.IsNullOrWhiteSpace(Error) ? "Unreadable file" : "";
@@ -67,6 +73,19 @@ public sealed record Track
     }.Where(part => !string.IsNullOrWhiteSpace(part)));
 }
 
+/// <summary>Only structured tag values define separate identities; punctuation is preserved.</summary>
+public static class ArtistCredits
+{
+    public static IReadOnlyList<string> ForTrack(Track track) => Clean(track.Performers is { Length: > 0 }
+        ? track.Performers : [track.Artist]);
+
+    public static string[] Clean(IEnumerable<string>? values) => (values ?? [])
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .Select(value => value.Trim().Normalize(System.Text.NormalizationForm.FormC))
+        .Where(value => !value.Equals("Unknown artist", StringComparison.OrdinalIgnoreCase))
+        .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+}
+
 public sealed class AlbumCard
 {
     private static readonly Color[] Palette =
@@ -76,6 +95,7 @@ public sealed class AlbumCard
         Color.FromRgb(110, 74, 68), Color.FromRgb(74, 99, 96)
     ];
     public string Id { get; init; } = "";
+    public string? FolderPath { get; init; }
     public string Title { get; init; } = "Untitled album";
     public string Artist { get; init; } = "Unknown artist";
     public string? ArtworkPath { get; init; }
@@ -119,6 +139,7 @@ public sealed class PlaybackSession
     public bool MiniAlwaysOnTop { get; set; }
     public string FocusVisualization { get; set; } = "Ribbon";
     public string LastSection { get; set; } = "Albums";
+    public string MusicView { get; set; } = "Grid";
     public DateTime SavedUtc { get; set; }
 }
 
@@ -131,7 +152,11 @@ public sealed class ListeningHistoryEntry
 
 public sealed class LibraryState
 {
-    public int Version { get; set; } = 2;
+    public int Version { get; set; } = 3;
+    public string? MusicRoot { get; set; }
+    public string AlbumLayout { get; set; } = "AlbumFolders";
+    public List<string> PinnedFolderPaths { get; set; } = [];
+    public Dictionary<string, string> FolderArtworkPaths { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public List<string> TrackPaths { get; set; } = [];
     public List<string> FolderPaths { get; set; } = [];
     public List<CustomAlbum> CustomAlbums { get; set; } = [];
@@ -150,6 +175,11 @@ public sealed record LibrarySnapshot(
     List<CustomAlbum> CustomAlbums,
     List<CustomPlaylist> Playlists)
 {
+    public long Revision { get; init; }
+    public string? MusicRoot { get; init; }
+    public string AlbumLayout { get; init; } = "AlbumFolders";
+    public List<string> PinnedFolderPaths { get; init; } = [];
+    public Dictionary<string, string> FolderArtworkPaths { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public List<ListeningHistoryEntry> History { get; init; } = [];
     public PlaybackSession Session { get; init; } = new();
     public string? RecoveryNotice { get; init; }

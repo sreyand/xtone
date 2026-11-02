@@ -4,8 +4,9 @@
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:controls="clr-namespace:XTONE.Controls"
         xmlns:services="clr-namespace:XTONE.Services"
+        xmlns:local="clr-namespace:XTONE"
         xmlns:views="clr-namespace:XTONE.Views"
-        Title="XTONE" Width="1280" Height="820" MinWidth="960" MinHeight="640"
+        Icon="/XTONE;component/Assets/xtone.ico" Title="XTONE" Width="1280" Height="820" MinWidth="960" MinHeight="640"
         WindowStyle="None" ResizeMode="CanResize" Background="{DynamicResource PaperBrush}"
         FontFamily="{StaticResource AppFont}" FontSize="14" Foreground="{DynamicResource InkBrush}"
         UseLayoutRounding="True" SnapsToDevicePixels="True" WindowStartupLocation="CenterScreen"
@@ -47,6 +48,7 @@
             <MenuItem Header="Play next" Click="TrackNext_Click" Tag="{Binding}"/>
             <MenuItem Header="Add to queue" Click="TrackQueue_Click" Tag="{Binding}"/>
             <Separator/>
+            <MenuItem Header="Move to folder…" Click="MoveTracksToFolder_Click" Tag="{Binding}"/>
             <MenuItem Header="Toggle favorite" Click="TrackFavorite_Click" Tag="{Binding}"/>
             <MenuItem Header="File details…" Click="TrackDetails_Click" Tag="{Binding}"/>
             <MenuItem Header="Locate file…" Click="TrackRelink_Click" Tag="{Binding}"/>
@@ -58,29 +60,92 @@
                     <StackPanel>
                         <DockPanel><TextBlock Text="♥" Foreground="{DynamicResource BlueBrush}" Margin="0,0,7,0"><TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsFavorite}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock><TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis"/></DockPanel>
                         <TextBlock Text="{Binding Artist}" Style="{StaticResource OptionalArtistCaption}" Foreground="{DynamicResource MutedBrush}" FontSize="12" Margin="0,4,0,0" TextTrimming="CharacterEllipsis"/>
-                        <TextBlock Text="{Binding Availability}" Foreground="{DynamicResource ErrorBrush}" FontSize="11"/>
+                        <TextBlock Text="{Binding Availability}" Foreground="{DynamicResource ErrorBrush}" FontSize="11"><TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Visible"/><Style.Triggers><DataTrigger Binding="{Binding Availability}" Value=""><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock>
                     </StackPanel>
                     <TextBlock Grid.Column="1" Text="{Binding DurationText}" Foreground="{DynamicResource MutedBrush}" FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Right"/>
                 </Grid>
             </Border>
         </DataTemplate>
-        <DataTemplate x:Key="AlbumCardTemplate">
-            <Button Tag="{Binding}" Click="AlbumCard_Click" Cursor="Hand" Background="Transparent" Padding="0" Margin="0,0,20,24"
+        <Style x:Key="MusicFolderMenuItem" TargetType="MenuItem">
+            <Setter Property="Visibility" Value="Collapsed"/>
+            <Style.Triggers><DataTrigger Binding="{Binding IsFolder}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+        </Style>
+        <Style x:Key="MusicTrackMenuItem" TargetType="MenuItem">
+            <Setter Property="Visibility" Value="Collapsed"/>
+            <Style.Triggers><DataTrigger Binding="{Binding IsTrack}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+        </Style>
+        <ContextMenu x:Key="MusicItemMenu" x:Shared="False" DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+            <MenuItem Header="Play folder" Click="AlbumPlay_Click" Tag="{Binding Folder}" Style="{StaticResource MusicFolderMenuItem}"/>
+            <MenuItem Header="Add folder to queue" Click="AlbumQueue_Click" Tag="{Binding Folder}" Style="{StaticResource MusicFolderMenuItem}"/>
+            <MenuItem Header="Open folder" Click="AlbumFolder_Click" Tag="{Binding Folder}" Style="{StaticResource MusicFolderMenuItem}"/>
+            <MenuItem Header="Pin to sidebar" Click="PinFolder_Click" Tag="{Binding Folder}" Style="{StaticResource MusicFolderMenuItem}"/>
+            <MenuItem Header="Rename…" Click="RenameMusicFolder_Click" Tag="{Binding Folder}" Style="{StaticResource MusicFolderMenuItem}"/>
+            <MenuItem Header="Choose artwork…" Click="ChooseFolderArtwork_Click" Tag="{Binding Folder}" Style="{StaticResource MusicFolderMenuItem}"/>
+            <MenuItem Header="Reset artwork" Click="ResetFolderArtwork_Click" Tag="{Binding Folder}" Style="{StaticResource MusicFolderMenuItem}"/>
+            <MenuItem Header="Play" Click="TrackPlay_Click" Tag="{Binding Track}" Style="{StaticResource MusicTrackMenuItem}"/>
+            <MenuItem Header="Play next" Click="TrackNext_Click" Tag="{Binding Track}" Style="{StaticResource MusicTrackMenuItem}"/>
+            <MenuItem Header="Add to queue" Click="TrackQueue_Click" Tag="{Binding Track}" Style="{StaticResource MusicTrackMenuItem}"/>
+            <MenuItem Header="Move to folder…" Click="MoveTracksToFolder_Click" Tag="{Binding Track}" Style="{StaticResource MusicTrackMenuItem}"/>
+            <MenuItem Header="Toggle favorite" Click="TrackFavorite_Click" Tag="{Binding Track}" Style="{StaticResource MusicTrackMenuItem}"/>
+            <MenuItem Header="File details…" Click="TrackDetails_Click" Tag="{Binding Track}" Style="{StaticResource MusicTrackMenuItem}"/>
+        </ContextMenu>
+        <Style x:Key="MusicItemGlyph" TargetType="Path">
+            <Setter Property="Data" Value="{StaticResource FolderIcon}"/><Setter Property="Stroke" Value="{DynamicResource MutedBrush}"/>
+            <Setter Property="StrokeThickness" Value="1.6"/><Setter Property="Fill" Value="Transparent"/><Setter Property="Stretch" Value="Uniform"/>
+            <Setter Property="Width" Value="18"/><Setter Property="Height" Value="18"/>
+            <Style.Triggers><DataTrigger Binding="{Binding IsTrack}" Value="True"><Setter Property="Data" Value="{StaticResource PlayIcon}"/><Setter Property="Fill" Value="{DynamicResource BlueBrush}"/><Setter Property="StrokeThickness" Value="0"/></DataTrigger></Style.Triggers>
+        </Style>
+        <!-- FocusVisualStyle supplies keyboard-only focus; pointer focus must not
+             leave a selection-looking border after a card drag. -->
+        <Style x:Key="MusicBrowseButton" TargetType="Button" BasedOn="{StaticResource QuietButton}">
+            <Setter Property="Template"><Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid>
+                        <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6"/>
+                        <Border x:Name="HoverSurface" Background="{DynamicResource HoverBrush}" CornerRadius="6" Opacity="0" IsHitTestVisible="False"/>
+                        <ContentPresenter x:Name="ButtonContent" Margin="{TemplateBinding Padding}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="local:MainWindow.IsMusicDropTarget" Value="True"><Setter TargetName="Chrome" Property="Background" Value="{DynamicResource SelectionBrush}"/></Trigger>
+                        <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Chrome" Property="Opacity" Value="0.4"/><Setter TargetName="ButtonContent" Property="Opacity" Value="0.4"/></Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value></Setter>
+        </Style>
+        <Style x:Key="PinnedFolderDropButton" TargetType="Button" BasedOn="{StaticResource NavButton}">
+            <Style.Triggers><Trigger Property="local:MainWindow.IsMusicDropTarget" Value="True"><Setter Property="Background" Value="{DynamicResource SelectionBrush}"/></Trigger></Style.Triggers>
+        </Style>
+        <DataTemplate x:Key="MusicCardTemplate">
+            <Button Style="{StaticResource MusicBrowseButton}" Tag="{Binding}" Click="MusicItem_Click" PreviewMouseLeftButtonDown="MusicFolder_MouseDown" PreviewMouseMove="MusicFolder_MouseMove" AllowDrop="True" DragOver="FolderTrack_DragOver" DragLeave="FolderTrack_DragLeave" Drop="FolderTrack_Drop" Cursor="Hand" Background="Transparent" Padding="0" Margin="0,0,20,24"
                     services:UiMotion.Hover="True" controls:FluidLayout.IsEnabled="True" controls:FluidLayout.Key="{Binding Id}"
                     controls:FluidLayout.Scope="{Binding RelativeSource={RelativeSource AncestorType=ListBox}}"
-                    BorderThickness="0" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Top" AutomationProperties.Name="{Binding Title}">
-                <Button.ContextMenu><ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
-                    <MenuItem Header="Play album" Click="AlbumPlay_Click" Tag="{Binding}"/>
-                    <MenuItem Header="Add album to queue" Click="AlbumQueue_Click" Tag="{Binding}"/>
-                    <MenuItem Header="Edit / make personal album…" Click="AlbumEdit_Click" Tag="{Binding}"/>
-                </ContextMenu></Button.ContextMenu>
+                    ContextMenu="{StaticResource MusicItemMenu}" BorderThickness="0" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Top" AutomationProperties.Name="{Binding Title}">
                 <Button.Template><ControlTemplate TargetType="Button"><Border x:Name="Card" Background="Transparent" CornerRadius="6" BorderBrush="Transparent" BorderThickness="1"><ContentPresenter/></Border>
-                    <ControlTemplate.Triggers><Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Card" Property="BorderBrush" Value="{DynamicResource BlueBrush}"/></Trigger></ControlTemplate.Triggers>
+                    <ControlTemplate.Triggers><Trigger Property="local:MainWindow.IsMusicDropTarget" Value="True"><Setter TargetName="Card" Property="Background" Value="{DynamicResource SelectionBrush}"/></Trigger></ControlTemplate.Triggers>
                 </ControlTemplate></Button.Template>
-                <StackPanel><controls:AlbumArtwork Source="{Binding Artwork}" SourcePath="{Binding ArtworkPath}" FallbackBrush="{Binding CoverBrush}"/>
-                    <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" Margin="0,10,0,0" TextTrimming="CharacterEllipsis"/>
+                <StackPanel>
+                    <Grid>
+                        <controls:AlbumArtwork Source="{Binding Folder.Artwork}" SourcePath="{Binding ArtworkPath}"/>
+                        <Border Background="{DynamicResource PaperBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1" CornerRadius="4" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="8" Padding="6">
+                            <Path Style="{StaticResource MusicItemGlyph}" Width="14" Height="14"/>
+                        </Border>
+                    </Grid>
+                    <TextBlock Text="{Binding Title}" ToolTip="{Binding Title}" FontSize="14" FontWeight="SemiBold" Margin="0,10,0,0" TextTrimming="CharacterEllipsis"/>
                     <TextBlock Text="{Binding Artist}" Style="{StaticResource OptionalArtistCaption}" FontSize="12" Foreground="{DynamicResource MutedBrush}" Margin="0,4,0,0" TextTrimming="CharacterEllipsis"/>
                 </StackPanel>
+            </Button>
+        </DataTemplate>
+        <DataTemplate x:Key="MusicListTemplate">
+            <Button Tag="{Binding}" Click="MusicItem_Click" PreviewMouseLeftButtonDown="MusicFolder_MouseDown" PreviewMouseMove="MusicFolder_MouseMove" AllowDrop="True" DragOver="FolderTrack_DragOver" DragLeave="FolderTrack_DragLeave" Drop="FolderTrack_Drop" Style="{StaticResource MusicBrowseButton}" ContextMenu="{StaticResource MusicItemMenu}" HorizontalContentAlignment="Stretch" Padding="12,10" AutomationProperties.Name="{Binding Title}">
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="32"/><ColumnDefinition Width="*"/><ColumnDefinition Width="52"/></Grid.ColumnDefinitions>
+                    <Path Style="{StaticResource MusicItemGlyph}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <StackPanel Grid.Column="1" Margin="0,0,16,0">
+                        <TextBlock Text="{Binding Title}" ToolTip="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{Binding Artist}" Style="{StaticResource OptionalArtistCaption}" Foreground="{DynamicResource MutedBrush}" FontSize="12" Margin="0,4,0,0" TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" Text="{Binding DurationText}" Foreground="{DynamicResource MutedBrush}" FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                </Grid>
             </Button>
         </DataTemplate>
     </Window.Resources>
@@ -102,21 +167,41 @@
                             <TextBlock x:Name="FolderSummary" Visibility="Collapsed"/>
                             <Button Content="Settings" Click="Settings_Click" Style="{StaticResource QuietButton}" HorizontalContentAlignment="Left" FontSize="12" Padding="8,10" ToolTip="Settings · Ctrl+,"/>
                         </StackPanel>
+                        <Border x:Name="MusicSidebarDropZone" Background="Transparent" AllowDrop="True" DragOver="SidebarFolder_DragOver" Drop="SidebarFolder_Drop" DragLeave="SidebarFolder_DragLeave">
                         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                             <StackPanel x:Name="SidebarContents" Margin="14,38,14,16">
                                 <Rectangle Width="128" Height="35" HorizontalAlignment="Left" Margin="12,0,0,30">
                                     <Rectangle.Fill><ImageBrush ImageSource="Assets/xtone-logo.png" Stretch="Uniform" Viewbox="0.16,0.414,0.675,0.172" ViewboxUnits="RelativeToBoundingBox"/></Rectangle.Fill>
                                 </Rectangle>
-                                <Button x:Name="LibraryNav" Content="Library" Tag="Library" Click="Section_Click" Style="{StaticResource NavButton}"/>
-                                <Button x:Name="AlbumsNav" Content="Albums" Tag="Albums" Click="Section_Click" Style="{StaticResource NavButton}" Visibility="Collapsed"/>
-                                <Button x:Name="PlaylistsNav" Content="Playlists" Tag="Playlists" Click="Section_Click" Style="{StaticResource NavButton}" Visibility="Collapsed"/>
+                                <Button x:Name="AlbumsNav" Content="Music" Tag="Albums" Click="Section_Click" Style="{StaticResource NavButton}" Visibility="Collapsed"/>
+                                <Button x:Name="LibraryNav" Content="All tracks" Tag="Library" Click="Section_Click" Style="{StaticResource NavButton}"/>
                                 <StackPanel x:Name="DiscoveryNavigation" Margin="0" Visibility="Collapsed">
                                     <Button x:Name="ArtistsNav" Content="Artists" Tag="Artists" Click="Section_Click" Style="{StaticResource NavButton}"/>
                                     <Button x:Name="FavoritesNav" Content="Favorites" Tag="Favorites" Click="Section_Click" Style="{StaticResource NavButton}"/>
                                     <Button x:Name="HistoryNav" Content="Recently played" Tag="History" Click="Section_Click" Style="{StaticResource NavButton}"/>
                                 </StackPanel>
+                                <StackPanel x:Name="PinnedFoldersPanel" Margin="0,12,0,0" Visibility="Collapsed">
+                                    <ItemsControl x:Name="PinnedFolderItems" AutomationProperties.Name="Pinned music folders">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Button Tag="{Binding}" Click="PinnedFolder_Click" Style="{StaticResource PinnedFolderDropButton}" AllowDrop="True" DragOver="FolderTrack_DragOver" DragLeave="FolderTrack_DragLeave" Drop="FolderTrack_Drop" HorizontalContentAlignment="Stretch" FontSize="14" ToolTip="{Binding FolderPath}" AutomationProperties.Name="{Binding Title}">
+                                                    <Button.ContextMenu><ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}"><MenuItem Header="Unpin" Click="UnpinFolder_Click" Tag="{Binding}"/><Separator/><MenuItem Header="Rename…" Click="RenameMusicFolder_Click" Tag="{Binding}"/><MenuItem Header="Choose artwork…" Click="ChooseFolderArtwork_Click" Tag="{Binding}"/><MenuItem Header="Reset artwork" Click="ResetFolderArtwork_Click" Tag="{Binding}"/></ContextMenu></Button.ContextMenu>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions><ColumnDefinition Width="24"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                                        <Path Data="{StaticResource FolderIcon}" Stroke="{DynamicResource MutedBrush}" StrokeThickness="1.6" Width="16" Height="16" Stretch="Uniform" HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                                                        <TextBlock Grid.Column="1" Text="{Binding Title}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                                    </Grid>
+                                                </Button>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                                <Border x:Name="SidebarPinHint" Margin="8,12,8,0" Padding="10,12" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1" CornerRadius="5" Background="{DynamicResource SelectionBrush}" Visibility="Collapsed" IsHitTestVisible="False">
+                                    <TextBlock Text="Pin folder here" Foreground="{DynamicResource MutedBrush}" FontSize="12" TextAlignment="Center"/>
+                                </Border>
                             </StackPanel>
                         </ScrollViewer>
+                        </Border>
                     </DockPanel>
                 </Border>
 
@@ -128,20 +213,29 @@
                     </Grid.RowDefinitions>
                     <Grid x:Name="PageHeader" Grid.Row="0" VerticalAlignment="Top">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                        <TextBlock x:Name="PageTitle" Text="Albums" FontSize="32" FontWeight="Bold" LineHeight="42" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="0,0,24,0"/>
+                        <TextBlock x:Name="PageTitle" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" Text="Music" FontSize="32" FontWeight="Bold" LineHeight="42" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="0,0,24,0"/>
                         <TextBlock x:Name="PageSubtitle" Visibility="Collapsed"/>
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Border x:Name="MusicViewToggle" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1" CornerRadius="5" Padding="2" Margin="0,0,10,0" VerticalAlignment="Center" Visibility="Collapsed">
+                                <StackPanel Orientation="Horizontal">
+                                    <Button x:Name="MusicGridButton" Click="MusicGridView_Click" Style="{StaticResource QuietButton}" Width="30" Height="28" Padding="7" ToolTip="Grid view" AutomationProperties.Name="Grid view">
+                                        <Path Data="M1,1 H6 V6 H1 Z M10,1 H15 V6 H10 Z M1,10 H6 V15 H1 Z M10,10 H15 V15 H10 Z" Stroke="{DynamicResource InkBrush}" StrokeThickness="1.3" Stretch="Uniform" Width="14" Height="14"/>
+                                    </Button>
+                                    <Button x:Name="MusicListButton" Click="MusicListView_Click" Style="{StaticResource QuietButton}" Width="30" Height="28" Padding="7" ToolTip="List view" AutomationProperties.Name="List view">
+                                        <Path Data="M1,2 H3 M6,2 H15 M1,8 H3 M6,8 H15 M1,14 H3 M6,14 H15" Stroke="{DynamicResource InkBrush}" StrokeThickness="1.5" Stretch="Uniform" Width="14" Height="14"/>
+                                    </Button>
+                                </StackPanel>
+                            </Border>
                             <Button x:Name="SearchToolbarButton" Click="Search_Click" Style="{StaticResource QuietButton}" Width="34" Height="34" Padding="9" ToolTip="Search · Ctrl+F" AutomationProperties.Name="Search library">
                                 <Path Data="{StaticResource SearchIcon}" Style="{StaticResource IconPath}" Width="16" Height="16"/>
                             </Button>
-                            <Button x:Name="HeaderAddMusicButton" Content="Add music" Click="AddMusic_Click" Style="{StaticResource QuietButton}" Height="34" Margin="8,0,4,0" FontSize="12"/>
+                            <Button x:Name="NewFolderButton" ToolTip="Create a folder for your music" Content="New folder" Click="CreateMusicFolder_Click" Style="{StaticResource QuietButton}" Height="34" Margin="8,0,4,0" FontSize="12"/>
                             <Button x:Name="HeaderMoreButton" Content="⋯" FontSize="20" Click="HeaderMore_Click" Style="{StaticResource QuietButton}" Width="34" Height="34" Padding="4" ToolTip="Library options" AutomationProperties.Name="Library options">
                                 <Button.ContextMenu><ContextMenu>
-                                    <MenuItem Header="Create album…" Click="CreateAlbum_Click"/>
-                                    <MenuItem Header="Create playlist…" Click="CreatePlaylist_Click"/>
-                                    <Separator/>
+                                    <MenuItem Header="Open music folder" Click="OpenMusicFolder_Click"/>
+                                    <MenuItem Header="Choose music folder…" Click="ChooseMusicFolder_Click"/>
                                     <MenuItem x:Name="HeaderQueueMenu" Header="Queue" Click="Queue_Click" Visibility="Collapsed"/>
-                                    <MenuItem Header="Rescan folders" Click="Rescan_Click"/>
+                                    <MenuItem Header="Rescan music folder" Click="Rescan_Click"/>
                                 </ContextMenu></Button.ContextMenu>
                             </Button>
                             <Button x:Name="QueueToolbarButton" Visibility="Collapsed"/>
@@ -174,18 +268,20 @@
 
                     <Grid Grid.Row="2">
                         <Grid x:Name="AlbumScroll">
-                            <ListBox x:Name="AlbumItems" Style="{StaticResource TrackList}" SizeChanged="AlbumViewport_SizeChanged" AutomationProperties.Name="Albums">
+                            <ListBox x:Name="AlbumItems" Style="{StaticResource TrackList}" SizeChanged="AlbumViewport_SizeChanged" AutomationProperties.Name="Music">
                                 <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="0"/><Setter Property="Focusable" Value="False"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><ContentPresenter/></ControlTemplate></Setter.Value></Setter></Style></ListBox.ItemContainerStyle>
-                                <ListBox.ItemTemplate><DataTemplate><ItemsControl ItemsSource="{Binding Albums}" ItemTemplate="{StaticResource AlbumCardTemplate}" Margin="0,0,-20,0"><ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="{Binding Columns}" Rows="1"/></ItemsPanelTemplate></ItemsControl.ItemsPanel></ItemsControl></DataTemplate></ListBox.ItemTemplate>
+                                <ListBox.ItemTemplate><DataTemplate><ItemsControl ItemsSource="{Binding Albums}" ItemTemplate="{StaticResource MusicCardTemplate}" Margin="0,0,-20,0"><ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Columns="{Binding Columns}" Rows="1"/></ItemsPanelTemplate></ItemsControl.ItemsPanel></ItemsControl></DataTemplate></ListBox.ItemTemplate>
+                            </ListBox>
+                            <ListBox x:Name="MusicList" Style="{StaticResource TrackList}" ItemTemplate="{StaticResource MusicListTemplate}" Visibility="Collapsed" AutomationProperties.Name="Music list">
+                                <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="0"/><Setter Property="Focusable" Value="False"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><ContentPresenter/></ControlTemplate></Setter.Value></Setter></Style></ListBox.ItemContainerStyle>
                             </ListBox>
                         </Grid>
 
                         <StackPanel x:Name="EmptyState" Panel.ZIndex="2" Visibility="Visible" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="400" Margin="24,0,24,24">
                             <TextBlock x:Name="EmptyHeadline" Text="Your music, here." FontSize="26" FontWeight="SemiBold" TextAlignment="Center" TextWrapping="Wrap"/>
-                            <TextBlock x:Name="EmptyDescription" Text="Add files or a folder to start listening." TextAlignment="Center" TextWrapping="Wrap" Foreground="{DynamicResource MutedBrush}" FontSize="13" LineHeight="21" Margin="0,12,0,24"/>
-                            <Button x:Name="CreateButton" Content="Create playlist" Click="CreateCollection_Click" Style="{StaticResource QuietButton}" HorizontalAlignment="Center" Margin="0,12,0,0" Visibility="Collapsed"/>
-                            <Button x:Name="EmptyAddMusicButton" Content="Add music" Click="AddMusic_Click" Style="{StaticResource PrimaryButton}" Width="136" HorizontalAlignment="Center"/>
-                            <TextBlock x:Name="DropMusicHint" Text="Or drop files or folders here" FontSize="11" Foreground="{DynamicResource MutedBrush}" HorizontalAlignment="Center" Margin="0,14,0,0"/>
+                            <TextBlock x:Name="EmptyDescription" Text="Choose your Music folder. Your files stay where they are." TextAlignment="Center" TextWrapping="Wrap" Foreground="{DynamicResource MutedBrush}" FontSize="13" LineHeight="21" Margin="0,12,0,24"/>
+                            <Button x:Name="EmptyAddMusicButton" Content="Choose folder" Click="ChooseMusicFolder_Click" Style="{StaticResource PrimaryButton}" Width="148" HorizontalAlignment="Center"/>
+                            <TextBlock x:Name="DropMusicHint" Text="Or drop your Music folder here" FontSize="11" Foreground="{DynamicResource MutedBrush}" HorizontalAlignment="Center" Margin="0,14,0,0"/>
                             <ProgressBar x:Name="WelcomeProgress" Width="260" Height="3" Margin="0,0,0,16" Visibility="Collapsed" Foreground="{DynamicResource BlueBrush}"
                                          IsIndeterminate="{Binding IsIndeterminate, ElementName=ScanProgress}" Maximum="{Binding Maximum, ElementName=ScanProgress}" Value="{Binding Value, ElementName=ScanProgress}"/>
                             <Button x:Name="WelcomeRetryButton" Content="Try again" Click="RetryLibrary_Click" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Center" Width="136" Visibility="Collapsed"/>
@@ -194,38 +290,45 @@
                         </StackPanel>
 
                         <Grid x:Name="LibraryPanel" Visibility="Collapsed">
-                            <ListBox x:Name="LibraryTracks" Margin="-10,0,-10,0" Style="{StaticResource TrackList}" ItemTemplate="{StaticResource TrackRowTemplate}" ContextMenu="{StaticResource TrackMenu}"
-                                     MouseDoubleClick="Tracks_MouseDoubleClick" KeyDown="Tracks_KeyDown" PreviewMouseRightButtonDown="Track_RightClick" AutomationProperties.Name="Library tracks"/>
+                            <ListBox x:Name="LibraryTracks" PreviewMouseLeftButtonDown="TrackSource_MouseDown" PreviewMouseMove="TrackSource_MouseMove" SelectionMode="Extended" Margin="-10,0,-10,0" Style="{StaticResource TrackList}" ItemTemplate="{StaticResource TrackRowTemplate}" ContextMenu="{StaticResource TrackMenu}"
+                                     MouseDoubleClick="Tracks_MouseDoubleClick" KeyDown="Tracks_KeyDown" PreviewMouseRightButtonDown="Track_RightClick" AutomationProperties.Name="All tracks"/>
                         </Grid>
 
                         <Grid x:Name="AlbumDetailPanel" Visibility="Collapsed">
                             <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
-                            <Grid Grid.Row="0" Margin="0,0,0,24">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="160" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <Grid x:Name="DetailHero" Grid.Row="0" Margin="0,0,0,24" AllowDrop="True" DragOver="FolderTrack_DragOver" DragLeave="FolderTrack_DragLeave" Drop="FolderTrack_Drop">
+                                <Grid.Style><Style TargetType="Grid"><Setter Property="Background" Value="Transparent"/><Style.Triggers><Trigger Property="local:MainWindow.IsMusicDropTarget" Value="True"><Setter Property="Background" Value="{DynamicResource SelectionBrush}"/></Trigger></Style.Triggers></Style></Grid.Style>
+                                <Grid.ColumnDefinitions><ColumnDefinition x:Name="DetailArtworkColumn" Width="160" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                                 <controls:AlbumArtwork x:Name="DetailArtwork" Width="148" Height="148" VerticalAlignment="Top" />
-                                <StackPanel Grid.Column="1" Margin="24,3,0,0">
-                                    <TextBlock x:Name="DetailTitle" FontSize="26" FontWeight="Bold" />
+                                <StackPanel x:Name="DetailSummary" Grid.Column="1" Margin="24,3,0,0">
                                     <TextBlock x:Name="DetailArtist" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" Style="{StaticResource OptionalArtistCaption}" Foreground="{DynamicResource MutedBrush}" FontSize="14" Margin="0,5,0,0" />
                                     <TextBlock x:Name="DetailMeta" Foreground="{DynamicResource MutedBrush}" FontSize="13" Margin="0,7,0,0" />
-                                    <ScrollViewer MaxHeight="72" VerticalScrollBarVisibility="Auto" Margin="0,10,0,0"><TextBlock x:Name="DetailNotes" Foreground="{DynamicResource MutedBrush}" FontSize="14" TextWrapping="Wrap" MaxWidth="620" HorizontalAlignment="Left" /></ScrollViewer>
-                                    <StackPanel Orientation="Horizontal" Margin="-10,8,0,0">
+                                    <StackPanel Orientation="Horizontal" Margin="-8,12,0,0">
                                         <Button Content="← Back" Click="BackToAlbums_Click" Style="{StaticResource SmallButton}"/>
                                         <Button Content="Play" Click="PlayCollection_Click" Style="{StaticResource SmallButton}"/>
-                                        <Button x:Name="EditCollectionButton" Content="Edit" Click="EditCollection_Click" Style="{StaticResource SmallButton}"/>
-                                        <Button x:Name="DeleteCollectionButton" Content="Delete collection" Click="DeleteCollection_Click" Style="{StaticResource SmallButton}"/>
+                                        <Button x:Name="AddFolderTracksButton" Content="Add tracks" Click="AddTracksToFolder_Click" Style="{StaticResource SmallButton}"/>
+                                        <Button x:Name="OpenAlbumFolderButton" Content="Open folder" Click="AlbumFolder_Click" Style="{StaticResource SmallButton}"/>
+                                        <Button x:Name="FolderOptionsButton" Content="⋯" Click="HeaderMore_Click" Style="{StaticResource SmallButton}" ToolTip="Folder options" AutomationProperties.Name="Folder options">
+                                            <Button.ContextMenu><ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+                                                <MenuItem Header="Rename…" Click="RenameMusicFolder_Click" Tag="{Binding}"/>
+                                                <MenuItem Header="Choose artwork…" Click="ChooseFolderArtwork_Click" Tag="{Binding}"/>
+                                                <MenuItem Header="Reset artwork" Click="ResetFolderArtwork_Click" Tag="{Binding}"/>
+                                            </ContextMenu></Button.ContextMenu>
+                                        </Button>
                                     </StackPanel>
                                 </StackPanel>
                             </Grid>
-                            <TextBlock x:Name="DetailEmptyState" Grid.Row="1" Text="No tracks in this collection yet." Foreground="{DynamicResource MutedBrush}" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Collapsed"/>
-                            <ListBox x:Name="DetailTracks" Grid.Row="1" Margin="-10,0,-10,0" Style="{StaticResource TrackList}" ItemTemplate="{StaticResource TrackRowTemplate}" ContextMenu="{StaticResource TrackMenu}"
-                                     MouseDoubleClick="Tracks_MouseDoubleClick" KeyDown="Tracks_KeyDown" PreviewMouseRightButtonDown="Track_RightClick" AutomationProperties.Name="Collection tracks"/>
+                            <TextBlock x:Name="DetailEmptyState" Grid.Row="1" Text="No tracks in this folder." Foreground="{DynamicResource MutedBrush}" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Collapsed"/>
+                            <ListBox x:Name="DetailTracks" PreviewMouseLeftButtonDown="TrackSource_MouseDown" PreviewMouseMove="TrackSource_MouseMove" SelectionMode="Extended" Grid.Row="1" Margin="-10,0,-10,0" Style="{StaticResource TrackList}" ItemTemplate="{StaticResource TrackRowTemplate}" ContextMenu="{StaticResource TrackMenu}"
+                                     MouseDoubleClick="Tracks_MouseDoubleClick" KeyDown="Tracks_KeyDown" PreviewMouseRightButtonDown="Track_RightClick" AutomationProperties.Name="Album tracks"/>
                         </Grid>
 
-                        <ScrollViewer x:Name="ArtistsPanel" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
-                            <ItemsControl x:Name="ArtistItems">
-                                <ItemsControl.ItemTemplate>
+                        <Grid x:Name="ArtistsPanel" Visibility="Collapsed">
+                            <ListBox x:Name="ArtistItems" Style="{StaticResource TrackList}" AutomationProperties.Name="Artists">
+                                <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="0"/><Setter Property="Focusable" Value="False"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><ContentPresenter/></ControlTemplate></Setter.Value></Setter></Style></ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
                                     <DataTemplate>
-                                        <Button Tag="{Binding}" Click="Artist_Click" Style="{StaticResource QuietButton}" HorizontalContentAlignment="Stretch" Padding="0,12">
+                                        <Button Tag="{Binding}" Click="Artist_Click" Style="{StaticResource QuietButton}" HorizontalContentAlignment="Stretch" Padding="0,12" ToolTip="{Binding Name}" AutomationProperties.Name="{Binding Name}">
                                             <Grid>
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                                 <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Margin="0,0,12,0" />
@@ -233,28 +336,11 @@
                                             </Grid>
                                         </Button>
                                     </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
-
-                        <Grid x:Name="PlaylistsPanel" Visibility="Collapsed">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                            <ItemsControl x:Name="PlaylistItems">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Button Tag="{Binding}" Click="Playlist_Click" Style="{StaticResource QuietButton}" HorizontalContentAlignment="Stretch" Padding="0,12">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                                <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Margin="0,0,12,0" />
-                                                <TextBlock Grid.Column="1" Text="{Binding TrackCountText}" Foreground="{DynamicResource MutedBrush}" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center" />
-                                            </Grid>
-                                        </Button>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                            </ScrollViewer>
-                            <StackPanel x:Name="PlaylistEmptyState" Visibility="Collapsed"/>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
                         </Grid>
+
+
                     </Grid>
                 </Grid>
             </Grid>
@@ -320,7 +406,7 @@
                 <DockPanel><Button DockPanel.Dock="Right" Content="×" Click="DismissNotice_Click" Style="{StaticResource QuietButton}" Width="28" Height="28" Padding="4" Margin="12,0,0,0" AutomationProperties.Name="Dismiss notification"/><TextBlock x:Name="NoticeText" FontSize="12" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/></DockPanel>
             </Border>
             <Border x:Name="MusicDropOverlay" Grid.Row="0" Panel.ZIndex="9" Background="{DynamicResource SelectionBrush}" BorderBrush="{DynamicResource BlueBrush}" BorderThickness="1" CornerRadius="6" Margin="240,60,24,24" Visibility="Collapsed" IsHitTestVisible="False">
-                <TextBlock Text="Drop music to add it" Foreground="{DynamicResource InkBrush}" FontSize="22" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <TextBlock Text="Drop audio onto a folder to add tracks" Foreground="{DynamicResource InkBrush}" FontSize="22" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
 
             <StackPanel Orientation="Horizontal" Grid.Row="0" Panel.ZIndex="10" HorizontalAlignment="Right" VerticalAlignment="Top"

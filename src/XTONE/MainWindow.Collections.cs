@@ -19,7 +19,7 @@ public partial class MainWindow
         {
             var snapshot = await Task.Run(_store.Load);
             if (_closed) return false;
-            ApplySnapshot(snapshot);
+            await ApplySnapshotAsync(snapshot);
             return true;
         }
         catch (Exception error)
@@ -66,46 +66,16 @@ public partial class MainWindow
         }
         finally { _libraryWriteGate.Release(); }
     }
-    private void CreateCollection_Click(object sender, RoutedEventArgs e)
-    { if (_section == "Playlists") CreatePlaylist_Click(sender, e); else CreateAlbum_Click(sender, e); }
-    private async void CreateAlbum_Click(object sender, RoutedEventArgs e) => await EditAlbumAsync(null);
-    private async void CreatePlaylist_Click(object sender, RoutedEventArgs e) => await EditPlaylistAsync(null);
-    private async Task EditAlbumAsync(AlbumCard? album)
+    private void AlbumFolder_Click(object sender, RoutedEventArgs e)
     {
-        if (_isDesignPreview) return;
-        CustomAlbum? draft = album is null ? null : _customAlbums.FirstOrDefault(item => item.Id == album.Id)
-            ?? new CustomAlbum { Title = album.Title, Artist = album.Artist, Notes = album.Notes, ArtworkPath = album.ArtworkPath, TrackPaths = album.Tracks.Select(track => track.Path).ToList() };
-        var dialog = new CollectionEditorWindow(_tracks, CollectionKind.Album, album: draft) { Owner = this };
-        if (ShowAnimatedDialog(dialog) != true || dialog.AlbumResult is not { } result) return;
-        if (!await PersistLibraryChangeAsync(() => _store.SaveAlbum(result), "save this album")
-            || !await ReloadSavedLibraryAsync()) return;
-        ShowSection("Albums");
-        if (_albumCards.FirstOrDefault(card => card.Id == result.Id) is { } saved) OpenAlbum(saved);
-    }
-    private async Task EditPlaylistAsync(CustomPlaylist? playlist)
-    {
-        if (_isDesignPreview) return;
-        var dialog = new CollectionEditorWindow(_tracks, CollectionKind.Playlist, playlist: playlist) { Owner = this };
-        if (ShowAnimatedDialog(dialog) != true || dialog.PlaylistResult is not { } result) return;
-        if (!await PersistLibraryChangeAsync(() => _store.SavePlaylist(result), "save this playlist")
-            || !await ReloadSavedLibraryAsync()) return;
-        ShowSection("Playlists");
-        _activePlaylist = result;
-        OpenAlbum(new AlbumCard { Id = result.Id, Title = result.Name, Artist = result.SmartRule is null ? "Private playlist" : "Smart playlist", Tracks = ResolvePlaylist(result) });
-    }
-    private async void EditCollection_Click(object sender, RoutedEventArgs e)
-    { if (_activePlaylist is { } playlist) await EditPlaylistAsync(playlist); else await EditAlbumAsync(_activeAlbum); }
-    private async void AlbumEdit_Click(object sender, RoutedEventArgs e)
-    { if ((sender as MenuItem)?.Tag is AlbumCard album) await EditAlbumAsync(album); }
-    private async void DeleteCollection_Click(object sender, RoutedEventArgs e)
-    {
-        if (_activeAlbum is not { } album || _isDesignPreview) return;
-        if (MessageBox.Show(this, $"Delete ‘{album.Title}’ from your collections? Your audio files will stay in their folders.", "Delete collection", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
-        var saved = _activePlaylist is { } playlist
-            ? await PersistLibraryChangeAsync(() => _store.DeletePlaylist(playlist.Id), "delete this playlist")
-            : album.IsCreatedLocally && await PersistLibraryChangeAsync(() => _store.DeleteAlbum(album.Id), "delete this album");
-        if (!saved || _closed) return;
-        ShowSection(_section); await ReloadSavedLibraryAsync();
+        var album = (sender as MenuItem)?.Tag as AlbumCard ?? _activeAlbum;
+        if (album?.FolderPath is not { Length: > 0 } path) return;
+        try
+        {
+            if (!Directory.Exists(path)) { SetStatus("This album folder is unavailable. Reconnect it and rescan."); return; }
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch (Exception error) { SetStatus($"Couldn't open the album folder: {error.Message}"); }
     }
     private void PlayCollection_Click(object sender, RoutedEventArgs e)
     { if (_activeAlbum?.Tracks.FirstOrDefault(track => track.CanPlay) is { } track) PlayTrack(track, _activeAlbum.Tracks); }
@@ -115,7 +85,7 @@ public partial class MainWindow
     { if ((sender as MenuItem)?.Tag is AlbumCard album) { foreach (var track in album.Tracks.Where(track => track.CanPlay)) _queue.Append(track); QueueChanged(); ShowNotice($"Added {album.Title} to queue"); } }
     private Track? ActionTrack(object sender) => (sender as MenuItem)?.Tag as Track ?? (_activeAlbum is null ? LibraryTracks.SelectedItem : DetailTracks.SelectedItem) as Track;
     private void TrackPlay_Click(object sender, RoutedEventArgs e)
-    { if (ActionTrack(sender) is { } track) PlayTrack(track, _activeAlbum?.Tracks ?? LibraryTracks.Items.OfType<Track>().ToList()); }
+    { if (ActionTrack(sender) is { } track) PlayTrack(track, _activeAlbum?.Tracks ?? (_section == "Albums" ? MusicList.Items.OfType<MusicBrowserItem>().Where(item => item.Track is not null).Select(item => item.Track!).ToList() : LibraryTracks.Items.OfType<Track>().ToList())); }
     private void TrackNext_Click(object sender, RoutedEventArgs e)
     { if (ActionTrack(sender) is { CanPlay: true } track) { _queue.InsertNext(track); QueueChanged(); ShowNotice($"Playing next: {track.Title}"); } }
     private void TrackQueue_Click(object sender, RoutedEventArgs e)
@@ -187,7 +157,7 @@ public partial class MainWindow
             if (relinksCurrent) await OpenCurrentTrackAsync(false, position, false);
             else if (_queue.Current?.Track is { } refreshed && _currentTrack is { } playing && SamePath(refreshed.Path, playing.Path))
             { _currentTrack = refreshed; UpdateNowPlaying(); }
-            QueueChanged(); ShowNotice(relinksCurrent ? "File reconnected. Playback is paused at your previous position." : "File reconnected across your library and collections");
+            QueueChanged(); ShowNotice(relinksCurrent ? "File reconnected. Playback is paused at your previous position." : "File reconnected across your library and queue");
         }
         catch (Exception error) { SetStatus($"Couldn't reconnect this file: {error.Message}"); }
     }

@@ -1,19 +1,22 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
+using System.Windows.Media.Imaging;
 using XTONE.Models;
 
 namespace XTONE.Services;
 
 /// <summary>
-/// Owns the local library. Source audio is never moved, modified, or deleted.
+/// Owns the local library. Source audio moves only through explicit organizer operations; tags are never rewritten.
 /// Metadata reads happen outside the state lock; each completed scan merges its
 /// results so a simultaneous playlist edit or session save is retained.
 /// </summary>
 public sealed class LibraryStore
 {
+    private const int MetadataReaderVersion = 2;
     private static readonly HashSet<string> Extensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".flac", ".wav", ".m4a", ".mp4", ".mp3"
@@ -28,12 +31,13 @@ public sealed class LibraryStore
     private bool _loaded;
     private string? _recoveryNotice;
     private long _metadataReadCount;
+    private long _revision;
     private string StateFile => Path.Combine(_root, "library.json");
     private string SessionFile => Path.Combine(_root, "session.json");
     private string ArtworkFolder => Path.Combine(_root, "artwork");
 
-    public LibraryStore(string? rootPath = null) => _root = Path.GetFullPath(rootPath ??
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "XTONE"));
+    public LibraryStore(string? rootPath = null) => _root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootPath ??
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "XTONE")));
 
     public string StorageDescription => _root;
     public long MetadataReadCount => Interlocked.Read(ref _metadataReadCount);
@@ -66,13 +70,364 @@ public sealed class LibraryStore
         CancellationToken cancellationToken = default) =>
         ScanAsync([], true, progress, cancellationToken);
 
+    public Task<LibrarySnapshot> ConfigureMusicFolderAsync(string root, string layout = "AlbumFolders",
+        IProgress<LibraryProgress>? progress = null, CancellationToken cancellationToken = default) =>
+        ScanMusicRootAsync(NormalizePath(root), FolderLibrary.NormalizeLayout(layout), true, progress, cancellationToken);
+
+    public string CreateMusicFolder(string name, string? parent = null)
+    {
+        _scanGate.Wait();
+        try
+        {
+            lock (_gate)
+            {
+                EnsureLoadedLocked();
+                var folder = MusicFileOrganizer.CreateFolder(_state.MusicRoot ?? throw new InvalidOperationException("Choose a Music folder first."), name, parent);
+                try { SaveLocked(); }
+                catch (Exception original)
+                {
+                    try { Directory.Delete(folder, false); }
+                    catch (Exception rollback) { throw new AggregateException("The folder was created, but its saved state could not be updated. Check the Music folder.", original, rollback); }
+                    throw;
+                }
+                return folder;
+            }
+        }
+        finally { _scanGate.Release(); }
+    }
+
+    public async Task<LibrarySnapshot> RenameMusicFolderAsync(string folderPath, string newName,
+        IProgress<LibraryProgress>? progress = null, CancellationToken cancellationToken = default)
+    {
+        await _scanGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await Task.Run(() =>
+            {
+                lock (_gate)
+                {
+                    EnsureLoadedLocked(); cancellationToken.ThrowIfCancellationRequested();
+                    var root = _state.MusicRoot ?? throw new InvalidOperationException("Choose a Music folder first.");
+                    var source = MusicFileOrganizer.ValidateDirectory(root, folderPath);
+                    if (SamePath(_root, source) || FolderLibrary.IsWithinRoot(_root, source))
+                        throw new IOException("The XTONE storage folder cannot be moved by renaming this folder.");
+                    var destination = MusicFileOrganizer.PrepareFolderRename(root, source, newName, cancellationToken);
+                    if (string.Equals(source, destination, StringComparison.Ordinal)) return SnapshotLocked();
+                    string Remap(string path) => SamePath(path, source) ? destination : FolderLibrary.IsWithinRoot(path, source)
+                        ? Path.Combine(destination, Path.GetRelativePath(source, path)) : path;
+                    var originalTracks = _state.TrackPaths.Where(path => FolderLibrary.IsWithinRoot(path, source)).ToArray();
+                    var untouched = _state.TrackPaths.Except(originalTracks, StringComparer.OrdinalIgnoreCase).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    if (originalTracks.Any(path => untouched.Contains(Remap(path))))
+                        throw new IOException("The renamed location already has saved tracks. Reconnect those files before using this name.");
+                    cancellationToken.ThrowIfCancellationRequested();
+                    Directory.Move(source, destination);
+                    try
+                    {
+                        progress?.Report(new(1, 1, "Updating folder references…"));
+                        cancellationToken.ThrowIfCancellationRequested();
+                        _state.TrackPaths = _state.TrackPaths.Select(Remap).ToList();
+                        _state.FolderPaths = _state.FolderPaths.Select(Remap).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                        _state.PinnedFolderPaths = _state.PinnedFolderPaths.Select(Remap).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                        _state.FavoritePaths = _state.FavoritePaths.Select(Remap).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                        _state.Session.QueuePaths = _state.Session.QueuePaths.Select(Remap).ToList();
+                        foreach (var entry in _state.History) entry.Path = Remap(entry.Path);
+                        _state.History = _state.History.GroupBy(entry => entry.Path, StringComparer.OrdinalIgnoreCase)
+                            .Select(group => new ListeningHistoryEntry { Path = group.Key, LastPlayedUtc = group.Max(entry => entry.LastPlayedUtc), PlayCount = group.Sum(entry => entry.PlayCount) }).ToList();
+                        foreach (var album in _state.CustomAlbums)
+                        { album.TrackPaths = album.TrackPaths.Select(Remap).ToList(); if (album.ArtworkPath is not null) album.ArtworkPath = Remap(album.ArtworkPath); }
+                        foreach (var playlist in _state.Playlists) playlist.TrackPaths = playlist.TrackPaths.Select(Remap).ToList();
+                        _state.MetadataCache = _state.MetadataCache.ToDictionary(pair => Remap(pair.Key), pair => pair.Value with
+                        { Path = Remap(pair.Value.Path), ArtworkPath = pair.Value.ArtworkPath is { } art ? Remap(art) : null }, StringComparer.OrdinalIgnoreCase);
+                        _state.FolderArtworkPaths = _state.FolderArtworkPaths.ToDictionary(pair => Remap(pair.Key), pair => Remap(pair.Value), StringComparer.OrdinalIgnoreCase);
+                        var now = DateTime.UtcNow;
+                        _state.Session.SavedUtc = now > _state.Session.SavedUtc ? now : _state.Session.SavedUtc.AddTicks(1);
+                        cancellationToken.ThrowIfCancellationRequested(); SaveLocked();
+                    }
+                    catch (Exception original)
+                    {
+                        _state = CloneState(_committedState);
+                        try { Directory.Move(destination, source); }
+                        catch (Exception rollback) { throw new AggregateException("The rename could not be saved or fully restored. Check both folder names.", original, rollback); }
+                        throw;
+                    }
+                    return SnapshotLocked();
+                }
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        finally { _scanGate.Release(); }
+    }
+
+    public async Task<LibrarySnapshot> SetFolderArtworkAsync(string folderPath, string? imagePath,
+        CancellationToken cancellationToken = default)
+    {
+        await _scanGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await Task.Run(() =>
+            {
+                lock (_gate)
+                {
+                    EnsureLoadedLocked(); cancellationToken.ThrowIfCancellationRequested();
+                    var root = _state.MusicRoot ?? throw new InvalidOperationException("Choose a Music folder first.");
+                    var folder = Path.TrimEndingDirectorySeparator(NormalizePath(folderPath));
+                    if (!FolderLibrary.IsWithinRoot(folder, root)) throw new IOException("Choose a folder inside your Music folder.");
+                    if (imagePath is null)
+                    {
+                        if (_state.FolderArtworkPaths.Remove(folder)) SaveLocked();
+                        return SnapshotLocked();
+                    }
+                    MusicFileOrganizer.ValidateDirectory(root, folder);
+                    var cached = CacheFolderArtwork(imagePath, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    _state.FolderArtworkPaths[folder] = cached; SaveLocked();
+                    return SnapshotLocked();
+                }
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        finally { _scanGate.Release(); }
+    }
+
+    private string CacheFolderArtwork(string imagePath, CancellationToken token)
+    {
+        using var stream = new FileStream(imagePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (stream.Length is <= 0 or > 32 * 1024 * 1024) throw new InvalidDataException("Choose an image smaller than 32 MB.");
+        using var memory = new MemoryStream(); stream.CopyTo(memory); token.ThrowIfCancellationRequested(); memory.Position = 0;
+        try
+        {
+            var decoder = BitmapDecoder.Create(memory, BitmapCreateOptions.DelayCreation, BitmapCacheOption.OnDemand);
+            var frame = decoder.Frames.FirstOrDefault() ?? throw new InvalidDataException("This image has no readable frame.");
+            var width = frame.PixelWidth; var height = frame.PixelHeight;
+            if (width <= 0 || height <= 0 || width > 16384 || height > 16384 || (long)width * height > 16_000_000)
+                throw new InvalidDataException("Choose artwork with no more than 16 million pixels.");
+            memory.Position = 0;
+            var bitmap = new BitmapImage(); bitmap.BeginInit(); bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.StreamSource = memory;
+            if (Math.Max(width, height) > 1200)
+            { if (width >= height) bitmap.DecodePixelWidth = 1200; else bitmap.DecodePixelHeight = 1200; }
+            bitmap.EndInit(); bitmap.Freeze(); token.ThrowIfCancellationRequested();
+            var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+            using var output = new MemoryStream(); encoder.Save(output); var bytes = output.ToArray();
+            token.ThrowIfCancellationRequested();
+            var target = Path.Combine(ArtworkFolder, "folder-" + Convert.ToHexString(SHA256.HashData(bytes))[..32] + ".png");
+            var temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try { File.WriteAllBytes(temporary, bytes); token.ThrowIfCancellationRequested(); File.Move(temporary, target, true); }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+            return target;
+        }
+        catch (Exception error) when (error is NotSupportedException or System.Runtime.InteropServices.COMException or ArgumentException)
+        { throw new InvalidDataException("Choose a readable PNG, JPEG, or BMP image.", error); }
+    }
+
+    public void SetFolderPinned(string path, bool pinned)
+    {
+        path = Path.TrimEndingDirectorySeparator(NormalizePath(path));
+        lock (_gate)
+        {
+            EnsureLoadedLocked();
+            var root = _state.MusicRoot ?? throw new InvalidOperationException("Choose a Music folder first.");
+            if (!FolderLibrary.IsWithinRoot(path, root))
+                throw new IOException("Pin a folder inside your Music folder.");
+            if (pinned)
+            {
+                MusicFileOrganizer.ValidateDirectory(root, path);
+                if (_state.PinnedFolderPaths.Contains(path, StringComparer.OrdinalIgnoreCase)) return;
+                _state.PinnedFolderPaths.Add(path);
+            }
+            else if (_state.PinnedFolderPaths.RemoveAll(item => SamePath(item, path)) == 0) return;
+            SaveLocked();
+        }
+    }
+
+    public Task<LibrarySnapshot> MoveTracksToFolderAsync(IEnumerable<string> paths, string destination,
+        IProgress<LibraryProgress>? progress = null, CancellationToken cancellationToken = default) =>
+        TransferTracksAsync(paths.ToArray(), destination, false, progress, cancellationToken);
+
+    public Task<LibrarySnapshot> CopyFilesToFolderAsync(IEnumerable<string> paths, string destination,
+        IProgress<LibraryProgress>? progress = null, CancellationToken cancellationToken = default) =>
+        TransferTracksAsync(paths.ToArray(), destination, true, progress, cancellationToken);
+
+    private async Task<LibrarySnapshot> TransferTracksAsync(string[] paths, string destination, bool copy,
+        IProgress<LibraryProgress>? progress, CancellationToken token)
+    {
+        await _scanGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            return await Task.Run(() =>
+            {
+                lock (_gate)
+                {
+                    EnsureLoadedLocked(); token.ThrowIfCancellationRequested();
+                    var root = _state.MusicRoot ?? throw new InvalidOperationException("Choose a Music folder first.");
+                    var transfers = MusicFileOrganizer.PrepareTransfers(root, paths, destination, copy);
+                    foreach (var item in transfers)
+                    {
+                        if (_state.TrackPaths.Contains(item.Destination, StringComparer.OrdinalIgnoreCase))
+                            throw new IOException($"{Path.GetFileName(item.Destination)} already has a saved library entry. Reconnect it with Locate file instead.");
+                        if (copy && !IsSupported(item.Source)) throw new InvalidDataException("Choose supported FLAC, WAV, ALAC, or MP3 audio files.");
+                        if (!copy && !_state.TrackPaths.Contains(item.Source, StringComparer.OrdinalIgnoreCase))
+                            throw new InvalidOperationException("A selected track is no longer in the library. Refresh it and try again.");
+                    }
+                    if (transfers.Count == 0) return SnapshotLocked();
+                    Action<int> report = done => progress?.Report(new(done, transfers.Count, copy ? "Copying tracks…" : "Moving tracks…"));
+                    // The organizer rolls back a partially completed filesystem batch itself.
+                    if (copy) MusicFileOrganizer.ExecuteCopies(transfers, report, token);
+                    else MusicFileOrganizer.ExecuteMoves(transfers, report, token);
+                    try
+                    {
+                        token.ThrowIfCancellationRequested();
+                        foreach (var item in transfers)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            if (copy)
+                            {
+                                var track = ReadTrack(item.Destination, null);
+                                if (!track.CanPlay) throw new InvalidDataException($"Could not read {Path.GetFileName(item.Source)}: {track.Error}");
+                                if (!_state.TrackPaths.Contains(item.Destination, StringComparer.OrdinalIgnoreCase)) _state.TrackPaths.Add(item.Destination);
+                                _state.MetadataCache[item.Destination] = track;
+                            }
+                            else
+                            {
+                                var previous = _state.MetadataCache.GetValueOrDefault(item.Source) ?? Placeholder(item.Source);
+                                RemapTrackLocked(item.Source, item.Destination, previous with { Path = item.Destination, IsMissing = false });
+                            }
+                        }
+                        token.ThrowIfCancellationRequested();
+                        if (!copy)
+                        {
+                            var now = DateTime.UtcNow;
+                            _state.Session.SavedUtc = now > _state.Session.SavedUtc ? now : _state.Session.SavedUtc.AddTicks(1);
+                        }
+                        SaveLocked();
+                    }
+                    catch (Exception original)
+                    {
+                        _state = CloneState(_committedState);
+                        try { if (copy) MusicFileOrganizer.RollbackCopies(transfers); else MusicFileOrganizer.RollbackMoves(transfers); }
+                        catch (Exception rollback) { throw new AggregateException("Changes could not be saved or fully rolled back. Check the listed file paths.", original, rollback); }
+                        throw;
+                    }
+                    return SnapshotLocked();
+                }
+            }, token).ConfigureAwait(false);
+        }
+        finally { _scanGate.Release(); }
+    }
+
+    private void RemapTrackLocked(string oldPath, string newPath, Track replacement)
+    {
+        ReplacePath(_state.TrackPaths, oldPath, newPath, true);
+        foreach (var album in _state.CustomAlbums) ReplacePath(album.TrackPaths, oldPath, newPath);
+        foreach (var playlist in _state.Playlists) ReplacePath(playlist.TrackPaths, oldPath, newPath);
+        ReplacePath(_state.FavoritePaths, oldPath, newPath, true);
+        ReplacePath(_state.Session.QueuePaths, oldPath, newPath);
+        foreach (var entry in _state.History.Where(item => SamePath(item.Path, oldPath))) entry.Path = newPath;
+        _state.MetadataCache.Remove(oldPath); _state.MetadataCache[newPath] = replacement;
+    }
+
+    private async Task<LibrarySnapshot> ScanMusicRootAsync(string musicRoot, string layout, bool choosing,
+        IProgress<LibraryProgress>? progress, CancellationToken token)
+    {
+        await _scanGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            return await Task.Run(() =>
+            {
+                // A refresh may have waited behind a root switch. Resolve its root
+                // only after owning the scan gate, never resurrect an older root.
+                if (!choosing)
+                    lock (_gate)
+                    {
+                        EnsureLoadedLocked();
+                        musicRoot = _state.MusicRoot ?? musicRoot;
+                        layout = _state.AlbumLayout;
+                    }
+                return ScanMusicRootCore(musicRoot, layout, choosing, progress, token);
+            }, token).ConfigureAwait(false);
+        }
+        finally { _scanGate.Release(); }
+    }
+
+    private LibrarySnapshot ScanMusicRootCore(string musicRoot, string layout, bool choosing,
+        IProgress<LibraryProgress>? progress, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (choosing && !Directory.Exists(musicRoot))
+            throw new DirectoryNotFoundException("Choose an available Music folder.");
+        Dictionary<string, Track> cache;
+        HashSet<string> candidates;
+        lock (_gate)
+        {
+            EnsureLoadedLocked(); _relinkedPaths.Clear();
+            cache = new(_state.MetadataCache, StringComparer.OrdinalIgnoreCase);
+            candidates = _state.TrackPaths.Where(path => FolderLibrary.IsWithinRoot(path, musicRoot))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        progress?.Report(new(0, 0, "Checking your Music folder…"));
+        if (!Directory.Exists(musicRoot))
+            progress?.Report(new(0, 0, $"Folder unavailable: {musicRoot}"));
+        else
+        {
+            try
+            {
+                var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = false,
+                    AttributesToSkip = FileAttributes.ReparsePoint, ReturnSpecialDirectories = false };
+                foreach (var path in Directory.EnumerateFiles(musicRoot, "*", options))
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (HasSupportedExtension(path) && !FolderLibrary.IsWithinRoot(path, _root))
+                        candidates.Add(NormalizePath(path));
+                }
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                // Never turn a partial/inaccessible scan into a destructive replacement.
+                if (choosing) throw new IOException("XTONE could not read the selected Music folder.", error);
+                progress?.Report(new(0, 0, $"Folder unavailable: {musicRoot}"));
+            }
+        }
+        var ordered = candidates.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
+        var results = new Dictionary<string, Track>(StringComparer.OrdinalIgnoreCase);
+        var updates = new ScanProgressReporter(progress);
+        for (var i = 0; i < ordered.Length; i++)
+        {
+            token.ThrowIfCancellationRequested();
+            var path = ordered[i]; results[path] = ReadOrReuse(path, cache.GetValueOrDefault(path));
+            updates.FileRead(i + 1, ordered.Length, Path.GetFileName(path));
+        }
+        lock (_gate)
+        {
+            token.ThrowIfCancellationRequested();
+            var known = _state.TrackPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var changed = !SamePath(_state.MusicRoot ?? "", musicRoot) || _state.AlbumLayout != layout;
+            foreach (var pair in results)
+            {
+                if (_relinkedPaths.ContainsKey(pair.Key)) continue;
+                if (known.Add(pair.Key)) { _state.TrackPaths.Add(pair.Key); changed = true; }
+                if (!_state.MetadataCache.TryGetValue(pair.Key, out var existing) || existing != pair.Value)
+                { _state.MetadataCache[pair.Key] = pair.Value; changed = true; }
+            }
+            // Legacy paths, collections and references remain stored for recovery.
+            _state.MusicRoot = musicRoot; _state.AlbumLayout = layout;
+            if (changed) SaveLocked();
+            return SnapshotLocked();
+        }
+    }
+
     private async Task<LibrarySnapshot> ScanAsync(string[] inputs, bool refresh,
         IProgress<LibraryProgress>? progress, CancellationToken token)
     {
         await _scanGate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            return await Task.Run(() => ScanCore(inputs, refresh, progress, token), token).ConfigureAwait(false);
+            return await Task.Run(() =>
+            {
+                string? currentRoot = null;
+                string layout = FolderLibrary.AlbumFolders;
+                if (refresh)
+                    lock (_gate) { EnsureLoadedLocked(); currentRoot = _state.MusicRoot; layout = _state.AlbumLayout; }
+                return currentRoot is null ? ScanCore(inputs, refresh, progress, token)
+                    : ScanMusicRootCore(currentRoot, layout, false, progress, token);
+            }, token).ConfigureAwait(false);
         }
         finally
         {
@@ -143,14 +498,14 @@ public sealed class LibraryStore
 
         var ordered = candidates.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
         var results = new Dictionary<string, Track>(StringComparer.OrdinalIgnoreCase);
+        var updates = new ScanProgressReporter(progress);
         for (var index = 0; index < ordered.Length; index++)
         {
             token.ThrowIfCancellationRequested();
             var path = ordered[index];
             cache.TryGetValue(path, out var previous);
             results[path] = ReadOrReuse(path, previous);
-            if (index == 0 || index % 8 == 0 || index == ordered.Length - 1)
-                progress?.Report(new LibraryProgress(index + 1, ordered.Length, Path.GetFileName(path)));
+            updates.FileRead(index + 1, ordered.Length, Path.GetFileName(path));
         }
         token.ThrowIfCancellationRequested();
 
@@ -159,19 +514,20 @@ public sealed class LibraryStore
             // No imports or metadata changes are committed after a cancelled scan.
             token.ThrowIfCancellationRequested();
             var known = new HashSet<string>(_state.TrackPaths, StringComparer.OrdinalIgnoreCase);
+            var changed = false;
             foreach (var result in results)
             {
                 // A relink performed while this scan was reading keeps its new path.
                 if (_relinkedPaths.ContainsKey(result.Key))
                     continue;
-                if (known.Add(result.Key))
-                    _state.TrackPaths.Add(result.Key);
-                _state.MetadataCache[result.Key] = result.Value with { };
+                if (known.Add(result.Key)) { _state.TrackPaths.Add(result.Key); changed = true; }
+                if (!_state.MetadataCache.TryGetValue(result.Key, out var existing) || existing != result.Value)
+                { _state.MetadataCache[result.Key] = result.Value; changed = true; }
             }
             foreach (var folder in folders)
                 if (!_state.FolderPaths.Contains(folder, StringComparer.OrdinalIgnoreCase))
-                    _state.FolderPaths.Add(folder);
-            SaveLocked();
+                { _state.FolderPaths.Add(folder); changed = true; }
+            if (changed) SaveLocked();
             progress?.Report(new LibraryProgress(ordered.Length, ordered.Length, "Library ready"));
             return SnapshotLocked();
         }
@@ -374,15 +730,16 @@ public sealed class LibraryStore
 
     private Track ReadOrReuse(string path, Track? previous)
     {
-        if (!File.Exists(path))
-            return (previous ?? Placeholder(path)) with { Path = path, IsMissing = true };
         try
         {
             var info = new FileInfo(path);
+            if (!info.Exists)
+                return (previous ?? Placeholder(path)) with { Path = path, IsMissing = true };
             if (previous is not null && !previous.IsMissing && string.IsNullOrWhiteSpace(previous.Error)
+                && previous.MetadataVersion == MetadataReaderVersion
                 && previous.FileSize == info.Length && previous.LastWriteUtc == info.LastWriteTimeUtc
                 && (previous.ArtworkPath is null || File.Exists(previous.ArtworkPath)))
-                return previous with { IsMissing = false };
+                return previous;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
@@ -443,10 +800,14 @@ public sealed class LibraryStore
             }
             return new Track
             {
+                Id = previous?.Id ?? Guid.NewGuid().ToString("N"),
+                MetadataVersion = MetadataReaderVersion,
                 Path = path,
                 Title = string.IsNullOrWhiteSpace(tag.Title) ? Path.GetFileNameWithoutExtension(path) : tag.Title,
-                Artist = string.IsNullOrWhiteSpace(tag.FirstPerformer) ? "Unknown artist" : tag.FirstPerformer,
-                AlbumArtist = tag.FirstAlbumArtist ?? "",
+                Artist = ArtistCredits.Clean(tag.Performers) is { Length: > 0 } performers ? string.Join(", ", performers) : "Unknown artist",
+                AlbumArtist = string.Join(", ", ArtistCredits.Clean(tag.AlbumArtists)),
+                Performers = tag.Performers?.ToArray() ?? [],
+                AlbumPerformers = tag.AlbumArtists?.ToArray() ?? [],
                 Album = string.IsNullOrWhiteSpace(tag.Album) ? "Unknown album" : tag.Album,
                 TrackNumber = tag.Track,
                 DiscNumber = tag.Disc,
@@ -489,6 +850,8 @@ public sealed class LibraryStore
         Directory.CreateDirectory(_root);
         Directory.CreateDirectory(ArtworkFolder);
         _state = ReadRecoverable<LibraryState>(StateFile) ?? new();
+        if (_state.Version < 3 && File.Exists(StateFile) && !File.Exists(StateFile + ".pre-folder-migration"))
+            File.Copy(StateFile, StateFile + ".pre-folder-migration", false);
         NormalizeState(_state);
         var session = ReadRecoverable<PlaybackSession>(SessionFile);
         if (session is not null && session.SavedUtc >= _state.Session.SavedUtc)
@@ -504,7 +867,7 @@ public sealed class LibraryStore
             return null;
         try
         {
-            return JsonSerializer.Deserialize<T>(File.ReadAllText(path), _json)
+            return ReadJsonFile<T>(path)
                 ?? throw new JsonException("The saved file was empty.");
         }
         catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException)
@@ -517,7 +880,7 @@ public sealed class LibraryStore
             {
                 try
                 {
-                    var recovered = JsonSerializer.Deserialize<T>(File.ReadAllText(backup), _json);
+                    var recovered = ReadJsonFile<T>(backup);
                     if (recovered is not null)
                     {
                         _recoveryNotice = "XTONE recovered your saved library from its backup.";
@@ -532,8 +895,27 @@ public sealed class LibraryStore
         }
     }
 
+    private T? ReadJsonFile<T>(string path)
+    {
+        // Keep large metadata caches in UTF-8 rather than materializing a second
+        // complete UTF-16 string before deserialization. Atomic replacement may
+        // proceed while this reader finishes its consistent old-file snapshot.
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.Read | FileShare.Delete, 65536, FileOptions.SequentialScan);
+        return JsonSerializer.Deserialize<T>(stream, _json);
+    }
+
     private static void NormalizeState(LibraryState state)
     {
+        state.MusicRoot = TryNormalizePath(state.MusicRoot, out var root) ? root : null;
+        state.AlbumLayout = FolderLibrary.NormalizeLayout(state.AlbumLayout);
+        state.PinnedFolderPaths = DistinctPaths(state.PinnedFolderPaths ?? []).Select(Path.TrimEndingDirectorySeparator)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var artwork = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in state.FolderArtworkPaths ?? [])
+            if (TryNormalizePath(pair.Key, out var folder) && TryNormalizePath(pair.Value, out var image))
+                artwork[Path.TrimEndingDirectorySeparator(folder)] = image;
+        state.FolderArtworkPaths = artwork;
         state.TrackPaths = DistinctPaths(state.TrackPaths ?? []);
         state.FolderPaths = DistinctPaths(state.FolderPaths ?? []);
         state.FavoritePaths = DistinctPaths(state.FavoritePaths ?? []);
@@ -566,20 +948,24 @@ public sealed class LibraryStore
             if (pair.Value is not null && TryNormalizePath(pair.Key, out var path))
                 cache[path] = pair.Value with
                 {
+                    Id = string.IsNullOrWhiteSpace(pair.Value.Id) ? Guid.NewGuid().ToString("N") : pair.Value.Id,
                     Path = path,
                     Title = pair.Value.Title ?? Path.GetFileNameWithoutExtension(path),
                     Artist = pair.Value.Artist ?? "Unknown artist",
                     AlbumArtist = pair.Value.AlbumArtist ?? "",
+                    Performers = pair.Value.Performers ?? [],
+                    AlbumPerformers = pair.Value.AlbumPerformers ?? [],
                     Album = pair.Value.Album ?? "Unknown album",
                     Format = pair.Value.Format ?? Path.GetExtension(path).TrimStart('.').ToUpperInvariant(),
                     Codec = pair.Value.Codec ?? ""
                 };
         state.MetadataCache = cache;
-        state.Version = 2;
+        state.Version = 3;
     }
 
     private static void NormalizeSession(PlaybackSession session)
     {
+        session.MusicView = session.MusicView == "List" ? "List" : "Grid";
         session.FocusVisualization = session.FocusVisualization is "Bars" or "Off" ? session.FocusVisualization : "Ribbon";
         session.QueuePaths = (session.QueuePaths ?? []).Where(path => TryNormalizePath(path, out _)).Select(NormalizePath).ToList();
         session.Volume = double.IsFinite(session.Volume) ? Math.Clamp(session.Volume, 0, 1) : .72;
@@ -590,25 +976,30 @@ public sealed class LibraryStore
             session.RepeatMode = session.Repeat ? "One" : "Off";
         if (session.Repeat && session.RepeatMode == "Off")
             session.RepeatMode = "One";
-        session.LastSection = string.IsNullOrWhiteSpace(session.LastSection) ? "Albums" : session.LastSection;
+        session.LastSection = session.LastSection is "Albums" or "Library" or "Favorites" or "History" or "Artists" ? session.LastSection : "Library";
     }
 
     private LibrarySnapshot SnapshotLocked()
     {
         var favorites = new HashSet<string>(_state.FavoritePaths, StringComparer.OrdinalIgnoreCase);
         return new LibrarySnapshot(
-            _state.TrackPaths.Select(path =>
+            _state.TrackPaths.Where(path => _state.MusicRoot is null || FolderLibrary.IsWithinRoot(path, _state.MusicRoot)).Select(path =>
             {
                 var track = _state.MetadataCache.GetValueOrDefault(path) ?? Placeholder(path);
                 // A snapshot is an in-memory view. RefreshAsync checks availability
                 // in the background so large or disconnected libraries never force
                 // one filesystem lookup per track while this state lock is held.
-                return track with { IsFavorite = favorites.Contains(path) };
+                return track with { IsFavorite = favorites.Contains(path), Performers = [.. track.Performers], AlbumPerformers = [.. track.AlbumPerformers] };
             }).ToList(),
-            [.. _state.FolderPaths],
+            _state.MusicRoot is { } root ? [root] : [.. _state.FolderPaths],
             _state.CustomAlbums.Select(CloneAlbum).ToList(),
             _state.Playlists.Select(ClonePlaylist).ToList())
         {
+            Revision = _revision,
+            MusicRoot = _state.MusicRoot,
+            AlbumLayout = _state.AlbumLayout,
+            PinnedFolderPaths = [.. _state.PinnedFolderPaths],
+            FolderArtworkPaths = new(_state.FolderArtworkPaths, StringComparer.OrdinalIgnoreCase),
             History = _state.History.Select(CloneHistory).OrderByDescending(item => item.LastPlayedUtc).ToList(),
             Session = CloneSession(_state.Session),
             RecoveryNotice = _recoveryNotice
@@ -621,6 +1012,7 @@ public sealed class LibraryStore
         {
             AtomicWrite(StateFile, _state);
             _committedState = CloneState(_state);
+            ++_revision;
         }
         catch
         {
@@ -884,12 +1276,16 @@ public sealed class LibraryStore
     private static LibraryState CloneState(LibraryState state) => new()
     {
         Version = state.Version,
+        MusicRoot = state.MusicRoot, AlbumLayout = state.AlbumLayout,
+        PinnedFolderPaths = [.. state.PinnedFolderPaths],
+        FolderArtworkPaths = new(state.FolderArtworkPaths, StringComparer.OrdinalIgnoreCase),
         TrackPaths = [.. state.TrackPaths], FolderPaths = [.. state.FolderPaths],
         CustomAlbums = state.CustomAlbums.Select(CloneAlbum).ToList(),
         Playlists = state.Playlists.Select(ClonePlaylist).ToList(),
         FavoritePaths = [.. state.FavoritePaths],
         History = state.History.Select(CloneHistory).ToList(),
-        MetadataCache = new Dictionary<string, Track>(state.MetadataCache, StringComparer.OrdinalIgnoreCase),
+        MetadataCache = state.MetadataCache.ToDictionary(pair => pair.Key,
+            pair => pair.Value with { Performers = [.. pair.Value.Performers], AlbumPerformers = [.. pair.Value.AlbumPerformers] }, StringComparer.OrdinalIgnoreCase),
         Session = CloneSession(state.Session)
     };
     private static PlaybackSession CloneSession(PlaybackSession session) => new()
@@ -899,6 +1295,19 @@ public sealed class LibraryStore
         Repeat = session.Repeat, RepeatMode = session.RepeatMode,
         OutputDeviceId = session.OutputDeviceId, ReducedMotion = session.ReducedMotion,
         MiniAlwaysOnTop = session.MiniAlwaysOnTop, FocusVisualization = session.FocusVisualization,
-        LastSection = session.LastSection, SavedUtc = session.SavedUtc
+        LastSection = session.LastSection, MusicView = session.MusicView, SavedUtc = session.SavedUtc
     };
+    private sealed class ScanProgressReporter(IProgress<LibraryProgress>? progress)
+    {
+        private long _last;
+        public void FileRead(int done, int total, string message)
+        {
+            if (progress is null) return;
+            var now = Stopwatch.GetTimestamp();
+            if (done != 1 && done != total && Stopwatch.GetElapsedTime(_last, now) < TimeSpan.FromMilliseconds(100)) return;
+            _last = now;
+            progress.Report(new(done, total, message));
+        }
+    }
+
 }

@@ -8,6 +8,7 @@
     <RootNamespace>XTONE</RootNamespace>
     <AssemblyName>XTONE</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\xtone.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,6 +18,7 @@
   <ItemGroup>
     <Resource Include="Assets\Fonts\*.ttf" />
     <Resource Include="Assets\xtone-logo.png" />
+    <Resource Include="Assets\xtone.ico" />
     <None Update="Assets\Fonts\OFL.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
