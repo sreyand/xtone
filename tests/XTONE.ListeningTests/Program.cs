@@ -246,6 +246,7 @@ internal static class Program
             True(state.Quality.Contains("WAV") && state.Quality.Contains("Lossless"));
             True(Math.Abs(originalPosition.TotalSeconds - .75) < .15);
         });
+        await CheckEqualizerTabAsync(dataRoot, renderRoot, audio, player, originalVersion, originalPosition);
         await CheckButtonFocusAsync(_main, "main transport and toolbar", Descendants(_main).OfType<Button>()
             .Where(button => AutomationProperties.GetName(button) is "Next track" or "Previous track" or "Search library")
             .Concat(new[] { (Button)_main.FindName("ShuffleButton"), (Button)_main.FindName("RepeatButton"), (Button)_main.FindName("PlayPauseButton") }));
@@ -633,6 +634,45 @@ internal static class Program
             Equal("Bars", persisted.Session.FocusVisualization);
             Equal(0d, persisted.Session.Volume);
         });
+    }
+
+    private static async Task CheckEqualizerTabAsync(string dataRoot, string renderRoot, string audio, AudioPlayer player,
+        long version, TimeSpan position)
+    {
+        var main = _main!;
+        var endpoint = player.EffectiveOutputDeviceId ?? throw new InvalidOperationException("No output in the EQ test.");
+        ((Button)main.FindName("EqualizerNav")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        var page = (EqualizerView)main.FindName("EqualizerPage");
+        await LayoutAsync(main);
+        Check("Equalizer navigation shows the live output and curve without replacing playback", () =>
+        {
+            Equal(Visibility.Visible, page.Visibility);
+            Equal(Visibility.Collapsed, ((FrameworkElement)main.FindName("EmptyState")).Visibility);
+            True(page.IsEnabled);
+            Equal(player.EffectiveOutputDeviceName, ((TextBlock)page.FindName("OutputName")).Text);
+            True(((FrameworkElement)page.FindName("ResponseGraph")).ActualWidth > 300);
+            AssertPlayerUnchanged(player, audio, version, position);
+        });
+        ((TextBox)page.FindName("GainBox")).Text = 3.ToString();
+        Invoke(page, "CommitFields");
+        ((CheckBox)page.FindName("EnabledBox")).IsChecked = true;
+        ((Button)page.FindName("CompareA")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Invoke(main, "FlushEqualizerSave");
+        await Get<Task>(main, "_equalizerSave");
+        Check("EQ edits save to the active endpoint and comparison state stays transient", () =>
+        {
+            var profiles = new EqualizerProfiles(dataRoot);
+            var settings = profiles.Get(endpoint);
+            True(settings.Enabled && settings.MatchLevel && !settings.AuditionOriginal);
+            Equal(3d, settings.Bands[0].GainDb);
+            True(!profiles.Get("different-output").Enabled);
+            AssertPlayerUnchanged(player, audio, version, position);
+        });
+        ((Button)page.FindName("CompareB")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await RenderAsync(main, 1060, 700, Path.Combine(renderRoot, "equalizer-1060x700.png"));
+        Invoke(page, "SetSettings", EqualizerSettings.Flat, true);
+        Invoke(main, "ShowSection", "Albums");
+        await LayoutAsync(main);
     }
 
     private static void AssertPlayerUnchanged(AudioPlayer expected, string path, long version, TimeSpan position)

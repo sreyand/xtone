@@ -976,7 +976,7 @@ public sealed class LibraryStore
             session.RepeatMode = session.Repeat ? "One" : "Off";
         if (session.Repeat && session.RepeatMode == "Off")
             session.RepeatMode = "One";
-        session.LastSection = session.LastSection is "Albums" or "Library" or "Favorites" or "History" or "Artists" ? session.LastSection : "Library";
+        session.LastSection = session.LastSection is "Albums" or "Library" or "Favorites" or "History" or "Artists" or "Equalizer" ? session.LastSection : "Library";
     }
 
     private LibrarySnapshot SnapshotLocked()

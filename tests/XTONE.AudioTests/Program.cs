@@ -1,6 +1,7 @@
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 using XTONE.Services;
+using XTONE.Models;
 
 var passed = 0;
 void Check(bool condition, string message)
@@ -95,6 +96,53 @@ while (analyzer.Read(tinyBuffer, 0, tinyBuffer.Length) != 0) { }
 Check(analyzer.GetSpectrum().Max() > .1f, "FFT accumulates small output reads into complete analysis windows");
 analyzer.Enabled = false;
 Check(analyzer.GetSpectrum().All(value => value == 0), "reduced motion disables and clears analysis");
+
+var disabledEqSamples = new[] { .1f, -.2f, 1.01f, -.45f };
+var disabledEq = new EqualizerSampleProvider(new ArrayProvider(disabledEqSamples, 48000), EqualizerSettings.Flat);
+var eqBypassBuffer = new float[4];
+Check(disabledEq.Read(eqBypassBuffer, 0, 4) == 4 && eqBypassBuffer.SequenceEqual(disabledEqSamples),
+    "disabled EQ passes original samples unchanged");
+
+var boostBands = new[] { new EqualizerBand(1000, 6, 1), new EqualizerBand(1000, 6, 2) };
+var combinedBoost = new EqualizerResponse(new EqualizerSettings(true, boostBands));
+Check(Math.Abs(combinedBoost.GainDbAt(1000) - 12) < .00001 && combinedBoost.HeadroomDb <= -12.1,
+    "the applied headroom accounts for overlapping filter boosts");
+var shelfResponse = new EqualizerResponse(new EqualizerSettings(true,
+    [new(180, 5, .70710678, EqualizerFilterType.LowShelf), new(9000, -3, .70710678, EqualizerFilterType.HighShelf)]));
+Check(Math.Abs(shelfResponse.GainDbAt(0) - 5) < .001 && Math.Abs(shelfResponse.GainDbAt(24000) + 3) < .001,
+    "shelves reach their specified low and high frequency gains");
+
+var cut = new EqualizerSettings(true, [new(1000, -9, 1)]);
+var toneProvider = new EqualizerSampleProvider(new StereoTone(), cut);
+var eqBlock = new float[4800];
+ReadTone(toneProvider, eqBlock, 20);
+var expectedRms = .75 / Math.Sqrt(2) * Math.Pow(10, -9 / 20d);
+Check(Math.Abs(LeftRms(eqBlock) - expectedRms) < .001 && eqBlock.Where((_, i) => i % 2 == 1).All(value => value == 0),
+    "audio gain follows the plotted EQ and one channel does not affect the other");
+toneProvider.Configure(EqualizerSettings.Flat);
+ReadTone(toneProvider, eqBlock, 20);
+Check(Math.Abs(LeftRms(eqBlock) - .75 / Math.Sqrt(2)) < .001,
+    "turning EQ off during playback fades to transparent bypass");
+
+var matching = cut with { MatchLevel = true, AuditionReference = new EqualizerSettings(true, [new(1000, -3, 1)]) };
+var matchProvider = new EqualizerSampleProvider(new StereoTone(), matching);
+ReadTone(matchProvider, eqBlock, 30);
+var tunedRms = LeftRms(eqBlock);
+matchProvider.Configure(matching with { AuditionOriginal = true });
+ReadTone(matchProvider, eqBlock, 30);
+Check(Math.Abs(20 * Math.Log10(LeftRms(eqBlock) / tunedRms)) < .15 && tunedRms < .25,
+    "K-weighted audition attenuates the louder tuned reference to match the same content");
+
+var editing = new EqualizerSampleProvider(new StereoTone(), cut);
+var extremeBands = Enumerable.Repeat(new EqualizerBand(1000, 18, 20), EqualizerSettings.MaxBands).ToArray();
+for (var edit = 0; edit < 40; edit++)
+{
+    editing.Configure(edit % 2 == 0 ? new EqualizerSettings(true, extremeBands) : cut);
+    ReadTone(editing, eqBlock, 1);
+    if (eqBlock.Any(sample => !float.IsFinite(sample) || Math.Abs(sample) > 1))
+        throw new InvalidOperationException("An EQ edit produced non-finite or clipping samples.");
+}
+Check(true, "rapid changes across maximum-size profiles remain finite and below sample clipping");
 
 var fixtures = args.FirstOrDefault(arg => !arg.StartsWith("--"));
 if (!string.IsNullOrEmpty(fixtures))
@@ -243,6 +291,11 @@ if (args.Contains("--playback") && fixtures is not null)
     player.Play(first);
     var activePath = player.CurrentPath;
     var activeVersion = player.PlaybackVersion;
+    var outputFormat = player.GetEqualizerOutput();
+    player.SetEqualizer(new EqualizerSettings(true, [new(1000, -6, 1)]));
+    Check(player.CurrentPath == activePath && player.PlaybackVersion == activeVersion && player.IsPlaying
+        && outputFormat.Id == player.EffectiveOutputDeviceId && outputFormat.SampleRate == player.OutputSampleRate,
+        "live EQ changes preserve the native output session and expose its actual device and mix rate");
     try { player.SetOutputDevice("XTONE-fixture-nonexistent-output-device"); throw new InvalidOperationException("A nonexistent device must fail."); }
     catch (AudioPlaybackException) { }
     Check(player.CurrentPath == activePath && player.PlaybackVersion == activeVersion && player.IsPlaying,
@@ -259,6 +312,31 @@ Console.WriteLine($"{passed} audio checks passed.");
 
 static AudioSegment Segment(string path, float[] values, IDisposable? owner = null) =>
     new(path, TimeSpan.FromSeconds(values.Length / 20d), TimeSpan.Zero, new ArrayProvider(values), owner);
+
+static void ReadTone(ISampleProvider provider, float[] buffer, int blocks)
+{
+    for (var i = 0; i < blocks; i++)
+        if (provider.Read(buffer, 0, buffer.Length) != buffer.Length)
+            throw new InvalidOperationException("Unexpected end of synthetic tone.");
+}
+
+static double LeftRms(float[] buffer) => Math.Sqrt(buffer.Where((_, index) => index % 2 == 0).Average(sample => sample * sample));
+
+internal sealed class StereoTone : ISampleProvider
+{
+    private int _frame;
+    public WaveFormat WaveFormat { get; } = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
+
+    public int Read(float[] buffer, int offset, int count)
+    {
+        for (var i = offset; i < offset + count; i += 2)
+        {
+            buffer[i] = (float)(.75 * Math.Sin(2 * Math.PI * _frame++ / 48));
+            buffer[i + 1] = 0;
+        }
+        return count;
+    }
+}
 
 internal sealed class ArrayProvider(float[] values, int sampleRate = 10) : ISampleProvider
 {

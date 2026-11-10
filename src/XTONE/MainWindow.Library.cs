@@ -245,7 +245,7 @@ public partial class MainWindow
     {
         if (!IsInitialized || SearchBox is null || _closed || _closingRequested) return;
         _searchDebounce?.Stop(); RefreshInterfaceState();
-        if (_activeAlbum is not null) { CancelVisiblePageQuery(); return; }
+        if (_activeAlbum is not null || _section == "Equalizer") { CancelVisiblePageQuery(); return; }
         var query = SearchBox.Text.Trim(); var section = _section; var view = _musicView; var columns = _albumColumns;
         var filter = (ViewFilter.SelectedItem as ComboBoxItem)?.Tag as string ?? "all";
         var sort = (SortPicker.SelectedItem as ComboBoxItem)?.Tag as string ?? "title";

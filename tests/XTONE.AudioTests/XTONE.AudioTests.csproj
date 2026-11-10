@@ -11,5 +11,8 @@
     <Compile Include="../../src/XTONE/Services/AudioTapProvider.cs" Link="AudioTapProvider.cs" />
     <Compile Include="../../src/XTONE/Services/AccurateMediaFoundationReader.cs" Link="AccurateMediaFoundationReader.cs" />
     <Compile Include="../../src/XTONE/Services/GaplessSampleProvider.cs" Link="GaplessSampleProvider.cs" />
+    <Compile Include="../../src/XTONE/Models/EqualizerSettings.cs" Link="EqualizerSettings.cs" />
+    <Compile Include="../../src/XTONE/Services/EqualizerResponse.cs" Link="EqualizerResponse.cs" />
+    <Compile Include="../../src/XTONE/Services/EqualizerSampleProvider.cs" Link="EqualizerSampleProvider.cs" />
   </ItemGroup>
 </Project>

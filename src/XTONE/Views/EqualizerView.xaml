@@ -1,0 +1,91 @@
+<UserControl x:Class="XTONE.Views.EqualizerView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:XTONE.Controls">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel MaxWidth="960" HorizontalAlignment="Stretch" Margin="0,0,8,20">
+            <Grid Margin="0,0,0,16">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center" Margin="0,0,14,0">
+                    <TextBlock x:Name="OutputName" Text="Windows default output" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                               ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
+                    <TextBlock Text="XTONE playback" Foreground="{DynamicResource MutedBrush}" FontSize="12" Margin="0,3,0,0"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <CheckBox x:Name="EnabledBox" Content="EQ" Checked="EnabledChanged" Unchecked="EnabledChanged"
+                              AutomationProperties.Name="Enable equalizer" VerticalAlignment="Center" Margin="0,0,14,0"/>
+                    <ComboBox x:Name="PresetPicker" Width="155" Height="34" SelectionChanged="PresetChanged"
+                              AutomationProperties.Name="Equalizer presets"/>
+                    <Button Content="⋯" Style="{StaticResource QuietButton}" Width="34" Padding="0" FontSize="18"
+                            Click="OptionsClick" AutomationProperties.Name="Equalizer options">
+                        <Button.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Save preset…" Click="SavePresetClick"/>
+                                <MenuItem Header="Remove preset…" Click="RemovePresetClick"/>
+                                <Separator/>
+                                <MenuItem Header="Import headphone or EQ preset…" Click="ImportClick"/>
+                                <MenuItem Header="Export for Equalizer APO…" Click="ExportClick"/>
+                                <Separator/>
+                                <MenuItem Header="Add band" Click="AddBandClick"/>
+                                <MenuItem Header="Remove selected band" Click="RemoveBandClick"/>
+                                <Separator/>
+                                <MenuItem Header="Reset curve" Click="ResetClick"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                    </Button>
+                </StackPanel>
+            </Grid>
+            <Border x:Name="GraphFrame" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1" CornerRadius="8" Padding="8,4,8,0">
+                <controls:EqualizerGraph x:Name="ResponseGraph" Height="225" Focusable="False"/>
+            </Border>
+            <WrapPanel x:Name="BandEditor" Margin="0,12,0,0">
+                <ComboBox x:Name="BandPicker" Width="96" Height="34" Margin="0,0,12,6" SelectionChanged="BandChanged"
+                          AutomationProperties.Name="Equalizer band"/>
+                <ComboBox x:Name="TypePicker" Width="116" Height="34" Margin="0,0,12,6" SelectionChanged="TypeChanged"
+                          AutomationProperties.Name="Filter type">
+                    <ComboBoxItem Content="Bell"/><ComboBoxItem Content="Low shelf"/><ComboBoxItem Content="High shelf"/>
+                </ComboBox>
+                <StackPanel Orientation="Horizontal" Margin="0,0,12,6">
+                    <TextBlock Text="Hz" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBox x:Name="FrequencyBox" Style="{StaticResource TextInput}" Width="84" Height="34" Padding="6,4"
+                             AutomationProperties.Name="Frequency in hertz" KeyDown="FieldKeyDown" LostKeyboardFocus="FieldLostFocus"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,0,12,6">
+                    <TextBlock Text="dB" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                    <TextBox x:Name="GainBox" Style="{StaticResource TextInput}" Width="72" Height="34" Padding="6,4"
+                             AutomationProperties.Name="Gain in decibels" KeyDown="FieldKeyDown" LostKeyboardFocus="FieldLostFocus"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,0,12,6">
+                    <TextBlock Text="Q" VerticalAlignment="Center" Margin="0,0,6,0" ToolTip="Higher Q affects a narrower range"/>
+                    <TextBox x:Name="WidthBox" Style="{StaticResource TextInput}" Width="76" Height="34" Padding="6,4"
+                             AutomationProperties.Name="Filter width Q" KeyDown="FieldKeyDown" LostKeyboardFocus="FieldLostFocus"/>
+                </StackPanel>
+            </WrapPanel>
+            <WrapPanel Margin="0,9,0,0">
+                <Button x:Name="CompareA" Content="Original" Click="CompareClick" Tag="A" Style="{StaticResource QuietButton}" Height="34"/>
+                <Button x:Name="CompareB" Content="Tuned" Click="CompareClick" Tag="B" Style="{StaticResource QuietButton}" Height="34"/>
+                <CheckBox x:Name="MatchBox" Content="Match loudness" Checked="MatchChanged" Unchecked="MatchChanged" VerticalAlignment="Center"
+                          Margin="14,0,12,0" ToolTip="Estimates loudness from the playing audio and lowers the louder side"/>
+                <Button x:Name="TasteButton" Content="Tune by ear" Click="StartTasteClick" Style="{StaticResource QuietButton}" Height="34"/>
+            </WrapPanel>
+            <TextBlock x:Name="HeadroomText" Foreground="{DynamicResource MutedBrush}" FontSize="12" Margin="0,8,0,0"/>
+            <Border x:Name="TastePanel" Visibility="Collapsed" Background="{DynamicResource SurfaceBrush}" CornerRadius="6" Padding="12" Margin="0,12,0,0">
+                <StackPanel>
+                    <TextBlock x:Name="TastePrompt" FontWeight="SemiBold" AutomationProperties.LiveSetting="Polite" TextWrapping="Wrap"/>
+                    <WrapPanel Margin="-8,4,0,0">
+                        <Button x:Name="PreferA" Content="Prefer A" Tag="A" Click="TasteChoiceClick" Style="{StaticResource QuietButton}"/>
+                        <Button x:Name="PreferB" Content="Prefer B" Tag="B" Click="TasteChoiceClick" Style="{StaticResource QuietButton}"/>
+                        <Button x:Name="TasteSkip" Content="No preference" Click="TasteSkipClick" Style="{StaticResource QuietButton}"/>
+                        <Button Content="Cancel" Click="TasteCancelClick" Style="{StaticResource QuietButton}"/>
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+            <WrapPanel x:Name="PresetSavePanel" Visibility="Collapsed" Margin="0,12,0,0">
+                <TextBox x:Name="PresetName" Style="{StaticResource TextInput}" Width="205" Height="34" Padding="8,4" AutomationProperties.Name="Preset name"
+                         KeyDown="PresetNameKeyDown"/>
+                <Button Content="Save preset" Style="{StaticResource QuietButton}" Click="ConfirmPresetClick" Margin="8,0,0,0"/>
+                <Button Content="Cancel" Style="{StaticResource QuietButton}" Click="CancelPresetClick"/>
+            </WrapPanel>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

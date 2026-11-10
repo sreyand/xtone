@@ -29,6 +29,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        InitializeEqualizer();
         Width = Math.Min(Width, SystemParameters.WorkArea.Width);
         Height = Math.Min(Height, SystemParameters.WorkArea.Height);
         MinWidth = Math.Min(MinWidth, SystemParameters.WorkArea.Width);
@@ -47,6 +48,7 @@ public partial class MainWindow : Window
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
         InitializeWindowsControls();
+        if (_equalizerProfiles?.LoadError is { } equalizerError) ShowNotice(equalizerError);
         _ = UiMotion.FadeInAsync(this);
         try { if (_isDesignPreview) LoadDesignPreview(); else await LoadLibraryAsync(); }
         catch (Exception error) { if (!_closed) { _libraryLoadFailed = true; _libraryLoadError = error.Message; ShowSection("Library"); SetStatus($"Couldn’t open your library: {error.Message}"); } }
@@ -65,6 +67,7 @@ public partial class MainWindow : Window
         if (_closingRequested) return;
         _closingRequested = true;
         CancelLibraryPresentation();
+        FlushEqualizerSave();
         ++_viewTransitionVersion;
         SavePlaybackSession(false);
         IsEnabled = false;
@@ -77,7 +80,7 @@ public partial class MainWindow : Window
         var fades = ListeningWindows().Where(window => window.IsVisible).Select(window => UiMotion.FadeOutAsync(window)).ToArray();
         // Let this cancelled Closing event return before issuing the final Close.
         await Task.Yield();
-        try { await Task.WhenAll(fades); await DrainLibraryWritesAsync(); await _sessionSaveTask; }
+        try { await Task.WhenAll(fades); await DrainLibraryWritesAsync(); await _sessionSaveTask; await _equalizerSave; }
         finally
         {
             _closed = true; CloseListeningViews();
@@ -89,17 +92,19 @@ public partial class MainWindow : Window
     }
     private void ShowSection(string section)
     {
-        _section = section is "Albums" or "Library" or "Artists" or "Favorites" or "History" ? section : "Albums";
+        if (_section == "Equalizer" && section != "Equalizer") EqualizerPage.FinishAudition();
+        _section = section is "Albums" or "Library" or "Artists" or "Favorites" or "History" or "Equalizer" ? section : "Albums";
         if (_section == "Artists" && _artistCards.Count == 0) _section = "Library";
         _activeAlbum = null;
         AlbumDetailPanel.Visibility = EmptyState.Visibility = Visibility.Collapsed;
         AlbumScroll.Visibility = _section == "Albums" ? Visibility.Visible : Visibility.Collapsed;
         LibraryPanel.Visibility = _section is "Library" or "Favorites" or "History" ? Visibility.Visible : Visibility.Collapsed;
         ArtistsPanel.Visibility = _section == "Artists" ? Visibility.Visible : Visibility.Collapsed;
+        EqualizerPage.Visibility = _section == "Equalizer" ? Visibility.Visible : Visibility.Collapsed;
         ViewFilter.Visibility = SortPicker.Visibility = _section is "Library" or "Favorites" or "History" ? Visibility.Visible : Visibility.Collapsed;
         PageTitle.Text = _section == "Albums" ? "Music" : _section == "Library" ? "All tracks" : _section == "History" ? "Recently played" : _section;
         SearchBox.Clear(); SearchBox.Visibility = Visibility.Collapsed; ViewFilter.SelectedIndex = 0;
-        foreach (var navigation in new[] { LibraryNav, AlbumsNav, ArtistsNav, FavoritesNav, HistoryNav })
+        foreach (var navigation in new[] { LibraryNav, AlbumsNav, ArtistsNav, FavoritesNav, HistoryNav, EqualizerNav })
         {
             var selected = Equals(navigation.Tag, _section);
             navigation.Background = selected ? (Brush)FindResource("SelectionBrush") : Brushes.Transparent;
@@ -108,14 +113,15 @@ public partial class MainWindow : Window
         }
         UpdateSectionSubtitle(); UpdateVisiblePage();
         RefreshInterfaceState();
-        FadePageIn(_section switch { "Albums" => AlbumScroll, "Artists" => ArtistsPanel, _ => LibraryPanel });
+        if (_section == "Equalizer") _ = ResolveEqualizerOutputAsync();
+        FadePageIn(_section switch { "Albums" => AlbumScroll, "Artists" => ArtistsPanel, "Equalizer" => EqualizerPage, _ => LibraryPanel });
     }
     private void UpdateSectionSubtitle()
     { PageSubtitle.Text = ""; PageSubtitle.Visibility = Visibility.Collapsed; }
 
     private void Section_Click(object sender, RoutedEventArgs e) { if ((sender as Button)?.Tag is string section) ShowSection(section); }
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) { if (IsLoaded) QueueVisiblePageRefresh(); }
-    private void Search_Click(object sender, RoutedEventArgs e) { if (_tracks.Count == 0 && !_isDesignPreview) return; if (_activeAlbum is not null) ShowSection("Library"); SearchBox.Visibility = Visibility.Visible; RefreshInterfaceState(); SearchBox.Focus(); SearchBox.SelectAll(); }
+    private void Search_Click(object sender, RoutedEventArgs e) { if (_tracks.Count == 0 && !_isDesignPreview) return; if (_activeAlbum is not null || _section == "Equalizer") ShowSection("Library"); SearchBox.Visibility = Visibility.Visible; RefreshInterfaceState(); SearchBox.Focus(); SearchBox.SelectAll(); }
     private void AlbumCard_Click(object sender, RoutedEventArgs e) { if ((sender as Button)?.Tag is AlbumCard album) OpenAlbum(album); }
     private void OpenAlbum(AlbumCard album)
     {
@@ -227,7 +233,7 @@ public partial class MainWindow : Window
         PageTitle.LineHeight = 42;
         PageSubtitle.FontSize = 13;
         SidebarContents.Margin = new Thickness(14, 38, 14, 16);
-        foreach (var nav in new[] { LibraryNav, AlbumsNav, ArtistsNav, FavoritesNav, HistoryNav })
+        foreach (var nav in new[] { LibraryNav, AlbumsNav, ArtistsNav, FavoritesNav, HistoryNav, EqualizerNav })
         { nav.Height = 44; nav.FontSize = 14; }
         MusicDropOverlay.Margin = new Thickness(SidebarColumn.Width.Value + 20, 52, 24, 24);
         RefreshInterfaceState();

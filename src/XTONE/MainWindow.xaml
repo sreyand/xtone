@@ -180,6 +180,7 @@
                                     <Button x:Name="FavoritesNav" Content="Favorites" Tag="Favorites" Click="Section_Click" Style="{StaticResource NavButton}"/>
                                     <Button x:Name="HistoryNav" Content="Recently played" Tag="History" Click="Section_Click" Style="{StaticResource NavButton}"/>
                                 </StackPanel>
+                                <Button x:Name="EqualizerNav" Content="Equalizer" Tag="Equalizer" Click="Section_Click" Style="{StaticResource NavButton}"/>
                                 <StackPanel x:Name="PinnedFoldersPanel" Margin="0,12,0,0" Visibility="Collapsed">
                                     <ItemsControl x:Name="PinnedFolderItems" AutomationProperties.Name="Pinned music folders">
                                         <ItemsControl.ItemTemplate>
@@ -267,6 +268,7 @@
                     </Grid>
 
                     <Grid Grid.Row="2">
+                        <views:EqualizerView x:Name="EqualizerPage" Visibility="Collapsed"/>
                         <Grid x:Name="AlbumScroll">
                             <ListBox x:Name="AlbumItems" Style="{StaticResource TrackList}" SizeChanged="AlbumViewport_SizeChanged" AutomationProperties.Name="Music">
                                 <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="0"/><Setter Property="Focusable" Value="False"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><ContentPresenter/></ControlTemplate></Setter.Value></Setter></Style></ListBox.ItemContainerStyle>

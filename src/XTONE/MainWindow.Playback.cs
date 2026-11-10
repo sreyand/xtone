@@ -54,7 +54,7 @@ public partial class MainWindow
     }
     private void ShowSelectedNavigation()
     {
-        foreach (var navigation in new[] { LibraryNav, AlbumsNav, ArtistsNav, FavoritesNav, HistoryNav })
+        foreach (var navigation in new[] { LibraryNav, AlbumsNav, ArtistsNav, FavoritesNav, HistoryNav, EqualizerNav })
         {
             var selected = Equals(navigation.Tag, _section);
             navigation.Background = selected ? (Brush)FindResource("SelectionBrush") : Brushes.Transparent;
@@ -394,6 +394,7 @@ public partial class MainWindow
     private void UiTimer_Tick(object? sender, EventArgs e)
     {
         if (_closed) return;
+        RefreshLiveEqualizerOutput();
         if (_currentTrack is not null)
         {
             if (!_isSeeking) PositionSlider.Value = Math.Clamp(PlaybackPosition.TotalSeconds, 0, Math.Max(1, DisplayDuration.TotalSeconds));
@@ -451,7 +452,7 @@ public partial class MainWindow
             await ScanAsync([dialog.MusicRoot], layout: dialog.AlbumLayout);
             if (_musicRoot is not null && SamePath(_musicRoot, dialog.MusicRoot)) ShowSection("Albums");
         }
-        try { if (ReconcileRenderedBoundary()) { _player.SetOutputDevice(dialog.OutputDeviceId); _outputDeviceId = dialog.OutputDeviceId; ResetHandledBoundary(); PrepareNextTrack(); } }
+        try { if (ReconcileRenderedBoundary()) { _player.SetOutputDevice(dialog.OutputDeviceId); _outputDeviceId = dialog.OutputDeviceId; ResetHandledBoundary(); PrepareNextTrack(); _ = ResolveEqualizerOutputAsync(); } }
         catch (Exception error) { SetStatus($"Couldn't change output: {error.Message}"); }
         _reducedMotion = dialog.ReducedMotion; _player.AnalysisEnabled = !_reducedMotion && ThemeAccessibility.AnimationsEnabled; UpdatePlayPauseButton(); SavePlaybackSession(false);
         UpdateListeningActivity();

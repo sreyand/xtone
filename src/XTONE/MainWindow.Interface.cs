@@ -17,7 +17,8 @@ public partial class MainWindow
     {
         if (PlayerDock is null || _closed) return;
         var music = _tracks.Count > 0 || _isDesignPreview;
-        var welcome = _musicRoot is null && !_isDesignPreview;
+        var equalizer = _section == "Equalizer";
+        var welcome = _musicRoot is null && !_isDesignPreview && !equalizer;
         var ready = (_libraryReady || _isDesignPreview) && !_libraryLoadFailed;
         var scanning = _scanCancellation is not null && _showScanProgress;
         var selected = _currentTrack is not null || _isDesignPreview;
@@ -31,18 +32,18 @@ public partial class MainWindow
         MusicList.Visibility = _musicView == "List" ? Visibility.Visible : Visibility.Collapsed;
         MusicGridButton.SetResourceReference(Button.BackgroundProperty, _musicView == "Grid" ? "SelectionBrush" : "PaperBrush");
         MusicListButton.SetResourceReference(Button.BackgroundProperty, _musicView == "List" ? "SelectionBrush" : "PaperBrush");
-        AlbumsNav.Visibility = !welcome ? Visibility.Visible : Visibility.Collapsed;
-        DiscoveryNavigation.Visibility = !welcome ? Visibility.Visible : Visibility.Collapsed;
+        AlbumsNav.Visibility = _musicRoot is not null || _isDesignPreview ? Visibility.Visible : Visibility.Collapsed;
+        DiscoveryNavigation.Visibility = AlbumsNav.Visibility;
         ArtistsNav.Visibility = _artistCards.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         FavoritesNav.Visibility = _hasFavorites || _section == "Favorites" ? Visibility.Visible : Visibility.Collapsed;
         HistoryNav.Visibility = _hasHistory || _section == "History" ? Visibility.Visible : Visibility.Collapsed;
-        var searching = music && (SearchBox.Visibility == Visibility.Visible || ViewFilter.SelectedIndex > 0);
+        var searching = !equalizer && music && (SearchBox.Visibility == Visibility.Visible || ViewFilter.SelectedIndex > 0);
         SearchControlsPanel.Visibility = searching ? Visibility.Visible : Visibility.Collapsed;
-        LibraryToolbar.Visibility = searching || (_statusNeedsAttention || scanning) && !welcome ? Visibility.Visible : Visibility.Collapsed;
-        SearchToolbarButton.Visibility = music ? Visibility.Visible : Visibility.Collapsed;
+        LibraryToolbar.Visibility = searching || (_statusNeedsAttention || scanning && !equalizer) && !welcome ? Visibility.Visible : Visibility.Collapsed;
+        SearchToolbarButton.Visibility = !equalizer && music ? Visibility.Visible : Visibility.Collapsed;
         QueueToolbarButton.Visibility = Visibility.Collapsed;
         HeaderQueueMenu.Visibility = _queue.Entries.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        HeaderMoreButton.Visibility = !welcome ? Visibility.Visible : Visibility.Collapsed;
+        HeaderMoreButton.Visibility = !equalizer && !welcome ? Visibility.Visible : Visibility.Collapsed;
         ImportStatusPanel.Visibility = scanning || _statusNeedsAttention ? Visibility.Visible : Visibility.Collapsed;
         ViewFilter.Visibility = SortPicker.Visibility = searching && _activeAlbum is null && _section is "Library" or "Favorites" or "History" ? Visibility.Visible : Visibility.Collapsed;
 
@@ -64,7 +65,12 @@ public partial class MainWindow
         EmptyHeadline.FontWeight = welcome ? FontWeights.SemiBold : FontWeights.Normal;
         EmptyHeadline.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, welcome ? "InkBrush" : "MutedBrush");
         EmptyDescription.Visibility = welcome || emptyFolderPage ? Visibility.Visible : Visibility.Collapsed;
-        if (welcome)
+        if (equalizer)
+        {
+            EmptyState.Visibility = Visibility.Collapsed;
+            ShowSelectedNavigation();
+        }
+        else if (welcome)
         {
             EmptyState.Visibility = Visibility.Visible;
             AlbumScroll.Visibility = LibraryPanel.Visibility = ArtistsPanel.Visibility = Visibility.Collapsed;

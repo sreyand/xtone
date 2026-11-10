@@ -140,9 +140,15 @@ dotnet run --project src/XTONE/XTONE.csproj -- --preview "path/to/reference.png"
 
 Preview uses example folder cards and a simulated signal for design comparison. It does not load, index, or save the personal library. Normal startup uses the actual configured collection.
 
-## Planned sound features
+## Equalizer
 
-Manual/static EQ, validated headphone profiles, system-wide Windows EQ for other applications, and later adaptive EQ/local ML remain planned work. They are not implemented by this folder-library release. System-wide processing needs a separately verified Windows audio backend; XTONE's existing playback chain only processes its own decoded samples.
+Open **Equalizer** in the sidebar. Enable **EQ**, drag a point on the response curve, or edit its frequency, gain, width, and filter type using the controls below it. Tuning starts flat and off. XTONE recalls the curve for the actual Windows output device and saves named presets under the Equalizer options menu.
+
+**Original** and **Tuned** compare the sound during playback. **Match loudness** estimates the level of both signals from the same audio and turns down the louder one. **Tune by ear** compares small bass, presence, and treble adjustments and applies the choices to the device's existing curve. You can skip any comparison or cancel the session.
+
+The curve shows the combined filters before preamp attenuation. Automatic headroom reduces gain based on the combined response. Live changes fade between stable filter states without restarting playback. The loudness estimate uses K-weighting and is intended for listening comparisons. It is not an integrated LUFS or true-peak meter.
+
+Import compatible parametric presets, including measurement-based presets for a specific headphone model, through **Import headphone or EQ preset**. **Export for Equalizer APO** saves the curve and its fixed preamp for a separately configured Windows endpoint. Load the exported preset in Equalizer APO and disable XTONE EQ on that endpoint to avoid applying the curve twice. XTONE's Equalizer applies directly to its own playback.
 
 ## Stack and assets
 

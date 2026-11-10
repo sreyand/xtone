@@ -7,10 +7,12 @@ using System.Threading.Tasks;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
+using XTONE.Models;
 
 namespace XTONE.Services;
 
 public sealed record AudioOutputDevice(string Id, string Name);
+public sealed record AudioOutputFormat(string Id, string Name, int SampleRate);
 
 public sealed class AudioPlaybackException : Exception
 {
@@ -52,6 +54,8 @@ public sealed class AudioPlayer : IDisposable
     private readonly SemaphoreSlim _decoderGate = new(1, 1);
     private PlaybackSession? _session;
     private string? _deviceId;
+    private AudioOutputFormat? _effectiveOutput;
+    private EqualizerSettings _equalizer = EqualizerSettings.Flat;
     private string? _lastError;
     private float _volume = .72f;
     private bool _analysisEnabled = true;
@@ -71,6 +75,39 @@ public sealed class AudioPlayer : IDisposable
     public string? CurrentPath { get { lock (_stateLock) return _session?.CurrentBoundary.Path; } }
     public string? LastError { get { lock (_stateLock) return _lastError; } }
     public string? OutputDeviceId { get { lock (_stateLock) return _deviceId; } }
+    public string? EffectiveOutputDeviceId { get { lock (_stateLock) return _effectiveOutput?.Id; } }
+    public string? EffectiveOutputDeviceName { get { lock (_stateLock) return _effectiveOutput?.Name; } }
+    public int OutputSampleRate { get { lock (_stateLock) return _effectiveOutput?.SampleRate ?? 48000; } }
+
+    /// <summary>Returns the installed output, or resolves the selected Windows endpoint.</summary>
+    public AudioOutputFormat GetEqualizerOutput()
+    {
+        string? selected;
+        lock (_stateLock)
+        {
+            if (_session is { Error: null } session)
+                return session.Format;
+            selected = _deviceId;
+        }
+        using var enumerator = new MMDeviceEnumerator();
+        using var device = ResolveDevice(enumerator, selected);
+        return DescribeOutput(device);
+    }
+
+    /// <summary>Reads the latest immutable profile for a resolved endpoint during session setup.</summary>
+    public Func<string, EqualizerSettings>? EqualizerForDevice { get; set; }
+
+    public void SetEqualizer(EqualizerSettings settings, string? expectedEndpoint = null)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        lock (_stateLock)
+        {
+            if (expectedEndpoint is not null && _session is { } session
+                && !string.Equals(expectedEndpoint, session.Format.Id, StringComparison.OrdinalIgnoreCase)) return;
+            Volatile.Write(ref _equalizer, settings);
+            _session?.Equalizer.Configure(settings);
+        }
+    }
     /// <summary>Changes whenever the output session is replaced or manually stopped.</summary>
     public long PlaybackVersion { get { lock (_stateLock) return _playbackVersion; } }
     public double CurrentBoundaryStart { get { lock (_stateLock) return _session?.CurrentBoundary.StartSeconds ?? 0; } }
@@ -282,23 +319,27 @@ public sealed class AudioPlayer : IDisposable
         {
             ThrowIfDisposed();
             var newId = string.IsNullOrWhiteSpace(id) ? null : id;
-            if (string.Equals(newId, _deviceId, StringComparison.Ordinal))
-                return;
             var session = CurrentSession;
+            if (string.Equals(newId, _deviceId, StringComparison.Ordinal) && session?.Error is null)
+                return;
             var position = Position;
             var playing = IsPlaying;
             var previous = _deviceId;
             var next = session?.NextRequestedPath;
+            AudioOutputFormat? effectiveOutput = null;
             try
             {
                 if (session is null)
                 {
                     using var enumerator = new MMDeviceEnumerator();
                     using var device = ResolveDevice(enumerator, newId);
+                    effectiveOutput = DescribeOutput(device);
                 }
                 lock (_stateLock)
                 {
                     _deviceId = newId;
+                    if (effectiveOutput is not null)
+                        _effectiveOutput = effectiveOutput;
                     _openVersion++;
                 }
                 if (session is not null)
@@ -454,7 +495,9 @@ public sealed class AudioPlayer : IDisposable
             if (_disposed || (openRequest is { } request && request != _openVersion))
                 return false;
             old = _session;
+            replacement.Equalizer.Configure(ResolveEqualizer(replacement.Format.Id), beforePlayback: true);
             _session = replacement;
+            _effectiveOutput = replacement.Format;
             replacement.Volume.Volume = _volume;
             replacement.Tap.Enabled = _analysisEnabled;
             _lastError = null;
@@ -479,13 +522,15 @@ public sealed class AudioPlayer : IDisposable
         {
             using var enumerator = new MMDeviceEnumerator();
             device = ResolveDevice(enumerator, _deviceId);
-            var sampleRate = device.AudioClient.MixFormat.SampleRate;
+            var format = DescribeOutput(device);
+            var sampleRate = format.SampleRate;
             first = AudioDecoder.Open(path, sampleRate, position, false);
             var pipeline = new GaplessSampleProvider(first);
-            var tap = new AudioTapProvider(pipeline) { Enabled = _analysisEnabled };
+            var equalizer = new EqualizerSampleProvider(pipeline, ResolveEqualizer(format.Id));
+            var tap = new AudioTapProvider(equalizer) { Enabled = _analysisEnabled };
             var volume = new VolumeSampleProvider(tap) { Volume = _volume };
             var output = new WasapiOut(device, AudioClientShareMode.Shared, true, 120);
-            session = new PlaybackSession(output, device, pipeline, tap, volume, sampleRate,
+            session = new PlaybackSession(output, device, format, pipeline, equalizer, tap, volume,
                 new AudioBoundary(first.Path, first.Duration, first.SourceOffset, 0));
             var captured = session;
             session.StoppedHandler = (_, args) => OnOutputStopped(captured, args);
@@ -512,6 +557,15 @@ public sealed class AudioPlayer : IDisposable
             }
             throw;
         }
+    }
+
+    private EqualizerSettings ResolveEqualizer(string deviceId)
+        => EqualizerForDevice?.Invoke(deviceId) ?? Volatile.Read(ref _equalizer);
+
+    private static AudioOutputFormat DescribeOutput(MMDevice device)
+    {
+        using var client = device.AudioClient;
+        return new AudioOutputFormat(device.ID, device.FriendlyName, client.MixFormat.SampleRate);
     }
 
     private static MMDevice ResolveDevice(MMDeviceEnumerator enumerator, string? id)
@@ -575,8 +629,13 @@ public sealed class AudioPlayer : IDisposable
             session.Ended = true;
             if (args.Exception is not null)
             {
-                error = args.Exception is AudioPlaybackException decoderError ? decoderError.Message
-                    : "Audio output stopped unexpectedly. Check the output device and try playing the track again.";
+                error = args.Exception switch
+                {
+                    AudioPlaybackException decoderError => decoderError.Message,
+                    { HResult: unchecked((int)0x88890004) } =>
+                        "The audio output disconnected. Reconnect it or choose another output in Settings, then press Play to resume.",
+                    _ => "Audio output stopped unexpectedly. Check the output device and try playing the track again."
+                };
                 session.Error = args.Exception;
                 _lastError = error;
             }
@@ -627,17 +686,19 @@ public sealed class AudioPlayer : IDisposable
     }
 
     private sealed class PlaybackSession(
-        WasapiOut output, MMDevice device, GaplessSampleProvider pipeline, AudioTapProvider tap,
-        VolumeSampleProvider volume, int sampleRate, AudioBoundary first) : IDisposable
+        WasapiOut output, MMDevice device, AudioOutputFormat format, GaplessSampleProvider pipeline,
+        EqualizerSampleProvider equalizer, AudioTapProvider tap, VolumeSampleProvider volume, AudioBoundary first) : IDisposable
     {
         private readonly object _clockLock = new();
         private double _lastClock;
         private int _disposed;
         public WasapiOut Output { get; } = output;
         public GaplessSampleProvider Pipeline { get; } = pipeline;
+        public AudioOutputFormat Format { get; } = format;
+        public EqualizerSampleProvider Equalizer { get; } = equalizer;
         public AudioTapProvider Tap { get; } = tap;
         public VolumeSampleProvider Volume { get; } = volume;
-        public int SampleRate { get; } = sampleRate;
+        public int SampleRate => Format.SampleRate;
         public long Version { get; set; }
         public AudioBoundary CurrentBoundary { get; set; } = first;
         public Queue<AudioBoundary> PendingBoundaries { get; } = new();
